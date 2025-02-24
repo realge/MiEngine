@@ -1,0 +1,46 @@
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inTexCoord;
+layout(location = 3) in vec4 inTangent;
+
+layout(binding = 0) uniform UniformBufferObject {
+    mat4 view;
+    mat4 proj;
+    vec4 cameraPos;
+    int numLights;
+    vec4 padding[3];
+} ubo;
+
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 baseColorFactor;
+    vec4 metallicRoughnessFactor;  // x=metallic, y=roughness
+    vec4 emissiveFactor;          // xyz=color, w=strength
+} push;
+
+layout(location = 0) out vec3 fragPos;
+layout(location = 1) out vec2 fragTexCoord;
+layout(location = 2) out vec3 fragNormal;
+layout(location = 3) out vec3 fragTangent;
+layout(location = 4) out vec3 fragBitangent;
+layout(location = 5) out vec3 fragCameraPos;
+
+void main() {
+    vec4 worldPos = push.model * vec4(inPosition, 1.0);
+    fragPos = worldPos.xyz;
+    fragTexCoord = inTexCoord;
+    
+    // Transform normal to world space
+    mat3 normalMatrix = transpose(inverse(mat3(push.model)));
+    fragNormal = normalize(normalMatrix * inNormal);
+    
+    // Calculate tangent and bitangent
+    fragTangent = normalize(normalMatrix * inTangent.xyz);
+    fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
+    
+    fragCameraPos = ubo.cameraPos.xyz;
+    
+    gl_Position = ubo.proj * ubo.view * worldPos;
+}
