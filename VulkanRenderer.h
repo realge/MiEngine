@@ -17,6 +17,7 @@
 #include "../include/Utils/CommonVertex.h"
 #include <set>
 
+#include "include/scene/Scene.h"
 
 
 struct SwapChainSupportDetails {
@@ -31,6 +32,7 @@ struct QueueFamilyIndices {
 };
 
 
+
 class VulkanRenderer
 {
    
@@ -40,8 +42,32 @@ class VulkanRenderer
         glm::mat4 view;
         glm::mat4 proj;
     };
+private:
+    VkImage depthImage;
+    VkDeviceMemory depthImageMemory;
+    VkImageView depthImageView;
 
-    private:
+    // Helper methods for depth resources
+    VkFormat findDepthFormat();
+    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
+                                VkImageTiling tiling,
+                                VkFormatFeatureFlags features);
+    bool hasStencilComponent(VkFormat format);
+    void createImage(uint32_t width, uint32_t height, VkFormat format,
+                    VkImageTiling tiling, VkImageUsageFlags usage,
+                    VkMemoryPropertyFlags properties, VkImage& image,
+                    VkDeviceMemory& imageMemory);
+    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
+    void createDepthResources();
+public:
+    VkDevice getDevice() const { return device; }
+    VkPhysicalDevice getPhysicalDevice() const { return physicalDevice; }
+    VkCommandPool getCommandPool() const { return commandPool; }
+    VkQueue getGraphicsQueue() const { return graphicsQueue; }
+    void recreateSwapChain();
+    void cleanupSwapChain();
+
+private:
    //TODO::need to refactor the code later
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
@@ -55,6 +81,16 @@ class VulkanRenderer
     std::vector<VkDescriptorSet> descriptorSets;
     ModelLoader modelLoader;
     std::vector<MeshData> meshes;
+
+    std::unique_ptr<Scene> scene;
+    
+    // Camera properties
+    glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+    glm::vec3 cameraTarget = glm::vec3(0.0f);
+    glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    float fov = 45.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 10.0f;
 
     //====================================================================
     
@@ -111,8 +147,7 @@ class VulkanRenderer
         void createGraphicsPipeline();
         void createFramebuffers();
         void createCommandPool();
-        void createVertexBuffer();
-        void createIndexBuffer();
+        
         void createCommandBuffers();
         void createSyncObjects();
         void run();
@@ -124,6 +159,7 @@ class VulkanRenderer
         void createUniformBuffers();
         void createDescriptorPool();
         void createDescriptorSets();
+    void updateMVPMatrices(const glm::mat4& model, const glm::mat4& view, const glm::mat4& proj);
         void cleanup();
 
         bool isDeviceSuitable(VkPhysicalDevice device);
