@@ -147,8 +147,27 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
             
             // Get normal
             if (mesh->GetElementNormal(0)) {
+                // Get normal by control point (vertex) instead of by polygon vertex
+                // This can help with normal smoothing
                 FbxVector4 normal;
-                mesh->GetPolygonVertexNormal(polygonIndex, vertexIndex, normal);
+                FbxGeometryElementNormal* normalElement = mesh->GetElementNormal(0);
+    
+                // Different approaches based on mapping mode
+                if (normalElement->GetMappingMode() == FbxGeometryElement::eByPolygonVertex) {
+                    // Handle per-polygon-vertex normals (what you likely have now)
+                    mesh->GetPolygonVertexNormal(polygonIndex, vertexIndex, normal);
+                } 
+                else if (normalElement->GetMappingMode() == FbxGeometryElement::eByControlPoint) {
+                    // Handle per-control-point normals
+                    int normalIndex = controlPointIndex;
+                    if (normalElement->GetReferenceMode() == FbxGeometryElement::eIndexToDirect) {
+                        normalIndex = normalElement->GetIndexArray().GetAt(normalIndex);
+                    }
+                    normal = normalElement->GetDirectArray().GetAt(normalIndex);
+                }
+    
+                // Normalize the normal before storing
+                normal.Normalize();
                 vertex.normal[0] = static_cast<float>(normal[0]);
                 vertex.normal[1] = static_cast<float>(normal[1]);
                 vertex.normal[2] = static_cast<float>(normal[2]);

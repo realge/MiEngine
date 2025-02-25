@@ -30,5 +30,5 @@ void main() {
     // Transform the normal using the model matrix
     // Note: for a proper normal transformation, you should use the inverse transpose
     // of the model matrix, but this is simplified for now
-    fragNormal = mat3(ubo.model) * inNormal;
+   fragNormal = transpose(inverse(mat3(ubo.model))) * inNormal;
 }

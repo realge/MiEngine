@@ -127,13 +127,16 @@ void VulkanRenderer::initVulkan() {
     // Load initial models
     Transform modelTransform;
     modelTransform.position = glm::vec3(0.0f, 0.0f, 0.0f);
-    modelTransform.rotation = glm::vec3(0.0f, 0.0f, 0.0f);
-    modelTransform.scale = glm::vec3(20.0f, 20.2f, 20.2f);
-    // Load the first model (now with texture support)
-    //scene->loadModel("models/eye.fbx", modelTransform);
-    scene->loadTexturedModel("models/Eye.fbx", "texture/blinn3_albedo2.jpeg", modelTransform);
-    
-  
+    //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
+    modelTransform.scale = glm::vec3(0.1f);
+
+
+   
+    //scene->loadModel("models/models/blackrat.fbx", modelTransform);
+    //scene->loadTexturedModel("models/blackrat.fbx", "", modelTransform);
+    //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
+    scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
+    //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
     // scene->loadModel("models/test_model.fbx", modelTransform);
    // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
     
@@ -412,7 +415,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;;//VK_POLYGON_MODE_FILL
     rasterizer.lineWidth = 1.f;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; //TODO: change to VK_CULL_MODE_BACK_BIT
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;//VK_FRONT_FACE_CLOCKWISE
     rasterizer.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -441,6 +444,15 @@ void VulkanRenderer::createGraphicsPipeline() {
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create pipeline layout!");
 
+  
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -452,16 +464,9 @@ void VulkanRenderer::createGraphicsPipeline() {
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
 
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create graphics pipeline!");
