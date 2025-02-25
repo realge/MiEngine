@@ -128,18 +128,18 @@ void VulkanRenderer::initVulkan() {
     Transform modelTransform;
     modelTransform.position = glm::vec3(0.0f, 0.0f, 0.0f);
     //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
-    modelTransform.scale = glm::vec3(0.1f);
+    modelTransform.scale = glm::vec3(10.5f);
 
 
    
     //scene->loadModel("models/models/blackrat.fbx", modelTransform);
-    //scene->loadTexturedModel("models/blackrat.fbx", "", modelTransform);
+    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
-    scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
+    //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
     //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
     // scene->loadModel("models/test_model.fbx", modelTransform);
    // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
-    
+    //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
     // Set up camera
     cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
     cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);

@@ -137,37 +137,29 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
             vertex.pos[2] = static_cast<float>(position[2]);
             
             // Get UV if available
+            // In ModelLoader.cpp, in the ProcessMesh function, modify the UV handling:
             if (mesh->GetElementUV(0)) {
                 FbxVector2 uv;
                 bool unmapped;
                 mesh->GetPolygonVertexUV(polygonIndex, vertexIndex, mesh->GetElementUV(0)->GetName(), uv, unmapped);
+    
+                // Store U coordinate as is
                 vertex.uv[0] = static_cast<float>(uv[0]);
-                vertex.uv[1] = static_cast<float>(uv[1]);
+    
+                // Flip the V coordinate for Vulkan
+                vertex.uv[1] = 1.0f - static_cast<float>(uv[1]);
+    
+                // Debug
+                if (vertices.size() < 10) {
+                    std::cout << "Original UV: (" << uv[0] << ", " << uv[1] << "), "
+                              << "Flipped UV: (" << vertex.uv[0] << ", " << vertex.uv[1] << ")" << std::endl;
+                }
             }
             
             // Get normal
             if (mesh->GetElementNormal(0)) {
-                // Get normal by control point (vertex) instead of by polygon vertex
-                // This can help with normal smoothing
                 FbxVector4 normal;
-                FbxGeometryElementNormal* normalElement = mesh->GetElementNormal(0);
-    
-                // Different approaches based on mapping mode
-                if (normalElement->GetMappingMode() == FbxGeometryElement::eByPolygonVertex) {
-                    // Handle per-polygon-vertex normals (what you likely have now)
-                    mesh->GetPolygonVertexNormal(polygonIndex, vertexIndex, normal);
-                } 
-                else if (normalElement->GetMappingMode() == FbxGeometryElement::eByControlPoint) {
-                    // Handle per-control-point normals
-                    int normalIndex = controlPointIndex;
-                    if (normalElement->GetReferenceMode() == FbxGeometryElement::eIndexToDirect) {
-                        normalIndex = normalElement->GetIndexArray().GetAt(normalIndex);
-                    }
-                    normal = normalElement->GetDirectArray().GetAt(normalIndex);
-                }
-    
-                // Normalize the normal before storing
-                normal.Normalize();
+                mesh->GetPolygonVertexNormal(polygonIndex, vertexIndex, normal);
                 vertex.normal[0] = static_cast<float>(normal[0]);
                 vertex.normal[1] = static_cast<float>(normal[1]);
                 vertex.normal[2] = static_cast<float>(normal[2]);
