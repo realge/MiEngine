@@ -17,7 +17,7 @@
 #include "../include/Utils/CommonVertex.h"
 #include "include/texture/Texture.h"
 #include <set>
-
+#include "include/Utils/TextureUtils.h"
 #include "include/scene/Scene.h"
 
 
@@ -32,7 +32,31 @@ struct QueueFamilyIndices {
     bool isComplete() { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
 
+enum class RenderMode {
+    Standard,
+    PBR,
+    PBR_IBL
+};
 
+struct MaterialUniformBuffer {
+    alignas(16) glm::vec4 baseColorFactor;    // RGB + alpha
+    alignas(4) float metallicFactor;
+    alignas(4) float roughnessFactor;
+    alignas(4) float aoStrength;
+    alignas(4) float emissiveStrength;
+    
+    // Flags for which textures are available (0 = not used, 1 = used)
+    alignas(4) int hasBaseColorMap;
+    alignas(4) int hasNormalMap;
+    alignas(4) int hasMetallicRoughnessMap;
+    alignas(4) int hasOcclusionMap;
+    alignas(4) int hasEmissiveMap;
+    
+    // Additional parameters
+    alignas(4) float alphaCutoff;
+    alignas(4) int alphaMode;  // 0 = opaque, 1 = mask, 2 = blend
+    alignas(8) glm::vec2 padding;
+};
 
 class VulkanRenderer
 {
@@ -42,6 +66,8 @@ class VulkanRenderer
         glm::mat4 model;
         glm::mat4 view;
         glm::mat4 proj;
+        glm::vec3 cameraPos;
+        float time;
     };
 public: //texture related
     // Update texture descriptor
@@ -51,8 +77,71 @@ public: //texture related
     VkDescriptorSet getCurrentDescriptorSet() const { 
         return descriptorSets[currentFrame]; 
     }
+public: //light related
+    struct LightData {
+        alignas(16) glm::vec4 position;   // w=1 for point, w=0 for directional
+        alignas(16) glm::vec4 color;      // rgb + intensity
+        alignas(4) float radius;
+        alignas(4) float falloff;
+        alignas(8) glm::vec2 padding;
+    };
+
+    #define MAX_LIGHTS 16
+
+    struct LightUniformBuffer {
+        alignas(4) int lightCount;
+        alignas(4) int padding[3];
+        alignas(16) LightData lights[MAX_LIGHTS];
+        alignas(16) glm::vec4 ambientColor;
+    };
+
+    // Add light buffer members
+    std::vector<VkBuffer> lightUniformBuffers;
+    std::vector<VkDeviceMemory> lightUniformBuffersMemory;
+    std::vector<void*> lightUniformBuffersMapped;
+
+    void createLightUniformBuffers();
+    void updateLights();
+    void setupIBL(const std::string& hdriPath);
+    void createIBLDescriptorSetLayout();
+    void createPBRPipeline();
+    void createIBLDescriptorSets();
+    void drawWithIBL(VkCommandBuffer commandBuffer);
+    void cleanupIBL();
+
+public:
+    void createDefaultTextures();
+    void createMaterialUniformBuffers();
+    void updateMaterialProperties(const Material& material);
+    void updateAllTextureDescriptors(const Material& material);
+
+private:
+
+    // IBL-related resources
+    VkDescriptorSetLayout iblDescriptorSetLayout;
+    VkDescriptorSet iblDescriptorSet;
+    VkPipelineLayout pbrPipelineLayout;  // Pipeline layout for PBR rendering
+    VkPipeline pbrPipeline;              // PBR pipeline
     
-  
+    // Current rendering mode
+    RenderMode renderMode = RenderMode::Standard;
+    std::shared_ptr<Texture> defaultAlbedoTexture;
+    std::shared_ptr<Texture> defaultNormalTexture;
+    std::shared_ptr<Texture> defaultMetallicRoughnessTexture;
+    std::shared_ptr<Texture> defaultOcclusionTexture;
+    std::shared_ptr<Texture> defaultEmissiveTexture;
+    
+    // Material UBO buffers
+    std::vector<VkBuffer> materialUniformBuffers;
+    std::vector<VkDeviceMemory> materialUniformBuffersMemory;
+    std::vector<void*> materialUniformBuffersMapped;
+    
+    std::shared_ptr<Texture> environmentMap; // Cubemap for reflections
+    std::shared_ptr<Texture> irradianceMap;  // Diffuse environment lighting
+    std::shared_ptr<Texture> prefilterMap;   // Prefiltered specular environment
+    std::shared_ptr<Texture> brdfLUT;
+
+    void drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj);
 private:
     std::shared_ptr<Texture> defaultTexture;
     // Create a default white texture

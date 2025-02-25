@@ -221,3 +221,133 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
         instance.mesh->draw(commandBuffer);
     }
 }
+void Scene::addLight(const glm::vec3& position, const glm::vec3& color, 
+                    float intensity, float radius, float falloff, bool isDirectional) {
+    Light light;
+    light.position = position;
+    light.color = color;
+    light.intensity = intensity;
+    light.radius = radius;
+    light.falloff = falloff;
+    light.isDirectional = isDirectional;
+    
+    lights.push_back(light);
+}
+
+void Scene::removeLight(size_t index) {
+    if (index < lights.size()) {
+        lights.erase(lights.begin() + index);
+    }
+}
+
+
+
+void Scene::setupDefaultLighting() {
+    // Clear any existing lights
+    clearLights();
+    
+    // Add a main directional light (sun)
+    addLight(
+        glm::vec3(1.0f, 1.0f, 1.0f),    // Direction (will be normalized)
+        glm::vec3(1.0f, 0.95f, 0.9f),   // Slightly warm white color
+        2.0f,                           // Intensity
+        0.0f,                           // Radius (0 for directional lights)
+        1.0f,                           // Falloff (unused for directional)
+        true                            // isDirectional = true
+    );
+    
+    // Add a fill light from the opposite direction
+    addLight(
+        glm::vec3(-0.5f, 0.2f, -0.5f),  // Direction
+        glm::vec3(0.6f, 0.7f, 1.0f),    // Slightly blue color
+        0.5f,                           // Lower intensity
+        0.0f,                           // Radius
+        1.0f,                           // Falloff
+        true                            // isDirectional
+    );
+    
+    // Add a point light
+    addLight(
+        glm::vec3(2.0f, 1.0f, 2.0f),    // Position
+        glm::vec3(1.0f, 0.8f, 0.6f),    // Warm color
+        5.0f,                           // Intensity
+        10.0f,                          // Radius
+        2.0f,                           // Falloff
+        false                           // isPoint
+    );
+}
+
+bool Scene::loadPBRModel(
+    const std::string& modelFilename,
+    const MaterialTexturePaths& texturePaths,
+    const glm::vec3& position,
+    const glm::vec3& rotation,
+    const glm::vec3& scale)
+{
+    // Create transform
+    Transform transform;
+    transform.position = position;
+    transform.rotation = rotation;
+    transform.scale = scale;
+    
+    // Load model with PBR materials
+    return loadTexturedModelPBR(modelFilename, texturePaths, transform);
+}
+
+
+Material Scene::createPBRMaterial(
+    const std::string& albedoPath,
+    const std::string& normalPath,
+    const std::string& metallicPath,
+    const std::string& roughnessPath,
+    const std::string& aoPath,
+    const std::string& emissivePath,
+    float metallic,
+    float roughness)
+{
+    Material material;
+    
+    // Set PBR scalar properties
+    material.setPBRProperties(metallic, roughness);
+    
+    // Load each texture if provided
+    std::shared_ptr<Texture> albedoTex = albedoPath.empty() ? nullptr : loadTexture(albedoPath);
+    std::shared_ptr<Texture> normalTex = normalPath.empty() ? nullptr : loadTexture(normalPath);
+    std::shared_ptr<Texture> metallicTex = metallicPath.empty() ? nullptr : loadTexture(metallicPath);
+    std::shared_ptr<Texture> roughnessTex = roughnessPath.empty() ? nullptr : loadTexture(roughnessPath);
+    std::shared_ptr<Texture> aoTex = aoPath.empty() ? nullptr : loadTexture(aoPath);
+    std::shared_ptr<Texture> emissiveTex = emissivePath.empty() ? nullptr : loadTexture(emissivePath);
+    
+    // If both metallic and roughness are provided, combine them into a single texture
+    std::shared_ptr<Texture> metallicRoughnessTex = nullptr;
+    if (metallicTex && roughnessTex) {
+        metallicRoughnessTex = material.createCombinedMetallicRoughnessTexture(
+            renderer->getDevice(),
+            renderer->getPhysicalDevice(),
+            renderer->getCommandPool(),
+            renderer->getGraphicsQueue(),
+            metallicTex,
+            roughnessTex
+        );
+    }
+    
+    // Set textures
+    material.setPBRTextures(
+        albedoTex,
+        normalTex,
+        metallicRoughnessTex ? metallicRoughnessTex : metallicTex,
+        metallicRoughnessTex ? nullptr : roughnessTex,  // Don't set roughness if combined
+        aoTex,
+        emissiveTex
+    );
+    
+    return material;
+}
+
+const std::vector<MeshInstance>& Scene::getMeshInstances() const {
+    return meshInstances;
+}
+
+void Scene::clearLights() {
+    lights.clear();
+}

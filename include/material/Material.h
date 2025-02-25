@@ -52,6 +52,7 @@ struct Material {
         }
     }
     
+    
     // Add a texture of specific type
     void setTexture(TextureType type, std::shared_ptr<Texture> texture) {
         textures[type] = texture;
@@ -103,4 +104,49 @@ struct Material {
         }
         return imageInfo;
     }
+
+    std::shared_ptr<Texture> createCombinedMetallicRoughnessTexture(VkDevice device, VkPhysicalDevice physicalDevice,
+                                                                    VkCommandPool commandPool, VkQueue graphicsQueue,
+                                                                    std::shared_ptr<Texture> metallicTex,
+                                                                    std::shared_ptr<Texture> roughnessTex);
+
+
+    // PBR Utility setters
+    void setPBRProperties(float metallic, float roughness) {
+        this->metallic = metallic;
+        this->roughness = roughness;
+    }
+
+    void setPBRTextures(std::shared_ptr<Texture> albedo, 
+                        std::shared_ptr<Texture> normal = nullptr,
+                        std::shared_ptr<Texture> metallic = nullptr,
+                        std::shared_ptr<Texture> roughness = nullptr,
+                        std::shared_ptr<Texture> ao = nullptr,
+                        std::shared_ptr<Texture> emissive = nullptr) {
+    
+        if (albedo) {
+            setTexture(TextureType::Diffuse, albedo);
+        }
+        if (normal) {
+            setTexture(TextureType::Normal, normal);
+        }
+        if (metallic) {
+            setTexture(TextureType::Metallic, metallic);
+        }
+        if (roughness) {
+            setTexture(TextureType::Roughness, roughness);
+        }
+        if (ao) {
+            setTexture(TextureType::AmbientOcclusion, ao);
+        }
+        if (emissive) {
+            setTexture(TextureType::Emissive, emissive);
+        }
+    }
+
+    void setEmissive(const glm::vec3& color, float strength = 1.0f) {
+        emissiveColor = color;
+        emissiveStrength = strength;
+    }
+
 };

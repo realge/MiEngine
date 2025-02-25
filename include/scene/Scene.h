@@ -71,12 +71,27 @@ public:
     
     // Add a single mesh instance to the scene
     void addMeshInstance(std::shared_ptr<Mesh> mesh, const Transform& transform = Transform());
+
+    
     
     // Update all mesh transforms
     void update(float deltaTime);
     
     // Record draw commands for all meshes
     void draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj);
+
+
+    bool loadPBRModel(
+    const std::string& modelFilename,
+    const MaterialTexturePaths& texturePaths,
+    const glm::vec3& position,
+    const glm::vec3& rotation,
+    const glm::vec3& scale);
+    Material createPBRMaterial(const std::string& albedoPath, const std::string& normalPath,
+                               const std::string& metallicPath, const std::string& roughnessPath,
+                               const std::string& aoPath,
+                               const std::string& emissivePath, float metallic, float roughness);
+    const std::vector<MeshInstance>& getMeshInstances() const;
 
 private:
     VulkanRenderer* renderer;
@@ -96,4 +111,29 @@ private:
     
     // Create a material with multiple textures
     Material createMaterialWithTextures(const MaterialTexturePaths& texturePaths);
+
+    
+
+private:
+    struct Light {
+        glm::vec3 position;
+        glm::vec3 color;
+        float intensity;
+        float radius;
+        float falloff;
+        bool isDirectional;
+    };
+
+    std::vector<Light> lights;
+
+public:
+
+    void addLight(const glm::vec3& position, const glm::vec3& color, 
+              float intensity = 1.0f, float radius = 10.0f, 
+              float falloff = 1.0f, bool isDirectional = false);
+              
+    void removeLight(size_t index);
+    void setupDefaultLighting();
+    void clearLights();
+    const std::vector<Light>& getLights() const { return lights; }
 };

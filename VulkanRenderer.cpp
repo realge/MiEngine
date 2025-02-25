@@ -1,5 +1,7 @@
 #include "VulkanRenderer.h"
 
+
+
 std::vector<const char*> deviceExtensions = {
    VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
@@ -112,10 +114,13 @@ void VulkanRenderer::initVulkan() {
     createFramebuffers();
     createCommandPool();
     
-    // Create default texture before creating descriptor sets
-    createDefaultTexture();
+    // Create default textures first
+    createDefaultTextures();
     
+    // Create uniform buffers
     createUniformBuffers();
+    createMaterialUniformBuffers(); // Add this line
+    
     createDescriptorPool();
     createDescriptorSets();
     createCommandBuffers();
@@ -739,26 +744,57 @@ void VulkanRenderer::drawFrame() {
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 void VulkanRenderer::createDescriptorSetLayout() {
-    // Uniform buffer binding for MVP matrices
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // Array of bindings
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    
+    // 0: Uniform buffer binding for MVP matrices
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    bindings[0].pImmutableSamplers = nullptr;
 
-    // Diffuse/Albedo texture binding
-    VkDescriptorSetLayoutBinding diffuseBinding{};
-    diffuseBinding.binding = 1;
-    diffuseBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    diffuseBinding.descriptorCount = 1;
-    diffuseBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // 1: Material UBO binding
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].pImmutableSamplers = nullptr;
     
-    // For now, we'll just create the layout with the first two bindings
-    // TODO:: In a future update, we can add more texture bindings for full PBR
+    // 2: Base color/albedo texture binding
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].pImmutableSamplers = nullptr;
     
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
-        uboLayoutBinding, diffuseBinding
-    };
+    // 3: Normal map binding
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].pImmutableSamplers = nullptr;
+    
+    // 4: Metallic-roughness map binding
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].pImmutableSamplers = nullptr;
+    
+    // 5: Occlusion map binding
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[5].pImmutableSamplers = nullptr;
+    
+    // 6: Emissive map binding
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[6].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -815,11 +851,7 @@ void VulkanRenderer::createDescriptorPool() {
 }
 
 void VulkanRenderer::createDescriptorSets() {
-    // First, create the default texture if it doesn't exist
-    if (!defaultTexture) {
-        createDefaultTexture();
-    }
-
+    // Create layout array for each frame
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -833,42 +865,116 @@ void VulkanRenderer::createDescriptorSets() {
     }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // Uniform buffer descriptor
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i];
-        bufferInfo.offset = 0;
-        bufferInfo.range = sizeof(UniformBufferObject);
+        // UBO descriptor for MVP matrices
+        VkDescriptorBufferInfo mvpBufferInfo{};
+        mvpBufferInfo.buffer = uniformBuffers[i];
+        mvpBufferInfo.offset = 0;
+        mvpBufferInfo.range = sizeof(UniformBufferObject);
 
-        // Default texture descriptor
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = defaultTexture->getImageView();
-        imageInfo.sampler = defaultTexture->getSampler();
+        // UBO descriptor for material properties
+        VkDescriptorBufferInfo materialBufferInfo{};
+        materialBufferInfo.buffer = materialUniformBuffers[i];
+        materialBufferInfo.offset = 0;
+        materialBufferInfo.range = sizeof(MaterialUniformBuffer);
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        // Texture image infos for all texture types
+        VkDescriptorImageInfo albedoInfo{};
+        albedoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        albedoInfo.imageView = defaultAlbedoTexture->getImageView();
+        albedoInfo.sampler = defaultAlbedoTexture->getSampler();
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = defaultNormalTexture->getImageView();
+        normalInfo.sampler = defaultNormalTexture->getSampler();
+
+        VkDescriptorImageInfo metallicRoughnessInfo{};
+        metallicRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        metallicRoughnessInfo.imageView = defaultMetallicRoughnessTexture->getImageView();
+        metallicRoughnessInfo.sampler = defaultMetallicRoughnessTexture->getSampler();
+
+        VkDescriptorImageInfo occlusionInfo{};
+        occlusionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        occlusionInfo.imageView = defaultOcclusionTexture->getImageView();
+        occlusionInfo.sampler = defaultOcclusionTexture->getSampler();
+
+        VkDescriptorImageInfo emissiveInfo{};
+        emissiveInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        emissiveInfo.imageView = defaultEmissiveTexture->getImageView();
+        emissiveInfo.sampler = defaultEmissiveTexture->getSampler();
+
+        // Create write descriptors for all bindings
+        std::array<VkWriteDescriptorSet, 7> descriptorWrites{};
         
-        // Uniform buffer write
+        // MVP UBO binding
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = descriptorSets[i];
         descriptorWrites[0].dstBinding = 0;
         descriptorWrites[0].dstArrayElement = 0;
         descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
+        descriptorWrites[0].pBufferInfo = &mvpBufferInfo;
 
-        // Texture sampler write
+        // Material UBO binding
         descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[1].dstSet = descriptorSets[i];
         descriptorWrites[1].dstBinding = 1;
         descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo;
+        descriptorWrites[1].pBufferInfo = &materialBufferInfo;
 
+        // Base color texture binding
+        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[2].dstSet = descriptorSets[i];
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].dstArrayElement = 0;
+        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[2].descriptorCount = 1;
+        descriptorWrites[2].pImageInfo = &albedoInfo;
+
+        // Normal map binding
+        descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[3].dstSet = descriptorSets[i];
+        descriptorWrites[3].dstBinding = 3;
+        descriptorWrites[3].dstArrayElement = 0;
+        descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[3].descriptorCount = 1;
+        descriptorWrites[3].pImageInfo = &normalInfo;
+
+        // Metallic-roughness map binding
+        descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[4].dstSet = descriptorSets[i];
+        descriptorWrites[4].dstBinding = 4;
+        descriptorWrites[4].dstArrayElement = 0;
+        descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[4].descriptorCount = 1;
+        descriptorWrites[4].pImageInfo = &metallicRoughnessInfo;
+
+        // Occlusion map binding
+        descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[5].dstSet = descriptorSets[i];
+        descriptorWrites[5].dstBinding = 5;
+        descriptorWrites[5].dstArrayElement = 0;
+        descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[5].descriptorCount = 1;
+        descriptorWrites[5].pImageInfo = &occlusionInfo;
+
+        // Emissive map binding
+        descriptorWrites[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[6].dstSet = descriptorSets[i];
+        descriptorWrites[6].dstBinding = 6;
+        descriptorWrites[6].dstArrayElement = 0;
+        descriptorWrites[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[6].descriptorCount = 1;
+        descriptorWrites[6].pImageInfo = &emissiveInfo;
+
+        // Update all descriptor sets at once
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), 
                              descriptorWrites.data(), 0, nullptr);
     }
 }
+
 
 void VulkanRenderer::updateMVPMatrices(const glm::mat4& model, const glm::mat4& view, const glm::mat4& proj) {
     UniformBufferObject ubo{};
@@ -1031,6 +1137,201 @@ void VulkanRenderer::createDefaultTexture() {
     defaultTexture = std::make_shared<Texture>(device, physicalDevice);
     defaultTexture->createFromPixels(whitePixel, 1, 1, 4, commandPool, graphicsQueue);
 }
+
+void VulkanRenderer::createDefaultTextures() {
+    // Create a 1x1 white texture as default albedo
+    unsigned char whitePixel[4] = {255, 255, 255, 255};
+    defaultAlbedoTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultAlbedoTexture->createFromPixels(whitePixel, 1, 1, 4, commandPool, graphicsQueue);
+    
+    // Create a 1x1 normal map (pointing straight up)
+    unsigned char normalPixel[4] = {128, 128, 255, 255};  // RGB format
+    defaultNormalTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultNormalTexture->createFromPixels(normalPixel, 1, 1, 4, commandPool, graphicsQueue);
+    
+    // Create a 1x1 metallic-roughness map (non-metallic, medium roughness)
+    // R: Unused, G: Roughness (128), B: Metallic (0), A: 255
+    unsigned char mrPixel[4] = {0, 128, 0, 255};
+    defaultMetallicRoughnessTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultMetallicRoughnessTexture->createFromPixels(mrPixel, 1, 1, 4, commandPool, graphicsQueue);
+    
+    // Create a 1x1 white texture for occlusion (no occlusion)
+    defaultOcclusionTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultOcclusionTexture->createFromPixels(whitePixel, 1, 1, 4, commandPool, graphicsQueue);
+    
+    // Create a 1x1 black texture for emissive (no emission)
+    unsigned char blackPixel[4] = {0, 0, 0, 255};
+    defaultEmissiveTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultEmissiveTexture->createFromPixels(blackPixel, 1, 1, 4, commandPool, graphicsQueue);
+}
+
+
+void VulkanRenderer::createMaterialUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(MaterialUniformBuffer);
+
+    materialUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    materialUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    materialUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        createBuffer(
+            bufferSize,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            materialUniformBuffers[i],
+            materialUniformBuffersMemory[i]
+        );
+
+        vkMapMemory(device, materialUniformBuffersMemory[i], 0, bufferSize, 0, &materialUniformBuffersMapped[i]);
+        
+        // Initialize with default values
+        MaterialUniformBuffer defaultMaterial{};
+        defaultMaterial.baseColorFactor = glm::vec4(1.0f);
+        defaultMaterial.metallicFactor = 0.0f;
+        defaultMaterial.roughnessFactor = 0.5f;
+        defaultMaterial.aoStrength = 1.0f;
+        defaultMaterial.emissiveStrength = 0.0f;
+        defaultMaterial.hasBaseColorMap = 0;
+        defaultMaterial.hasNormalMap = 0;
+        defaultMaterial.hasMetallicRoughnessMap = 0;
+        defaultMaterial.hasOcclusionMap = 0;
+        defaultMaterial.hasEmissiveMap = 0;
+        defaultMaterial.alphaCutoff = 0.5f;
+        defaultMaterial.alphaMode = 0; // Opaque
+        
+        memcpy(materialUniformBuffersMapped[i], &defaultMaterial, sizeof(defaultMaterial));
+    }
+}
+
+void VulkanRenderer::updateMaterialProperties(const Material& material) {
+    MaterialUniformBuffer materialData{};
+    
+    // Set base properties
+    materialData.baseColorFactor = glm::vec4(material.diffuseColor, material.alpha);
+    materialData.metallicFactor = material.metallic;
+    materialData.roughnessFactor = material.roughness;
+    materialData.aoStrength = 1.0f;  // Default full strength
+    materialData.emissiveStrength = material.emissiveStrength;
+    
+    // Set texture flags
+    materialData.hasBaseColorMap = material.hasTexture(TextureType::Diffuse) ? 1 : 0;
+    materialData.hasNormalMap = material.hasTexture(TextureType::Normal) ? 1 : 0;
+    materialData.hasMetallicRoughnessMap = 
+        (material.hasTexture(TextureType::Metallic) || material.hasTexture(TextureType::Roughness)) ? 1 : 0;
+    materialData.hasOcclusionMap = material.hasTexture(TextureType::AmbientOcclusion) ? 1 : 0;
+    materialData.hasEmissiveMap = material.hasTexture(TextureType::Emissive) ? 1 : 0;
+    
+    // Alpha settings (defaults for now)
+    materialData.alphaCutoff = 0.5f;
+    materialData.alphaMode = 0;  // Opaque
+    
+    // Copy data to the current frame's uniform buffer
+    memcpy(materialUniformBuffersMapped[currentFrame], &materialData, sizeof(materialData));
+}
+void VulkanRenderer::updateAllTextureDescriptors(const Material& material) {
+    std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
+    std::array<VkDescriptorImageInfo, 5> imageInfos{};
+    int writeCount = 0;
+    
+    // Base color/albedo texture
+    if (material.hasTexture(TextureType::Diffuse)) {
+        imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Diffuse);
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultAlbedoTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultAlbedoTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSets[currentFrame];
+    descriptorWrites[writeCount].dstBinding = 2;  // Albedo binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // Normal map texture
+    if (material.hasTexture(TextureType::Normal)) {
+        imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Normal);
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultNormalTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultNormalTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSets[currentFrame];
+    descriptorWrites[writeCount].dstBinding = 3;  // Normal binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // Metallic-roughness map
+    if (material.hasTexture(TextureType::Metallic) || material.hasTexture(TextureType::Roughness)) {
+        // In a production implementation, you might want to handle these separately or combine them
+        if (material.hasTexture(TextureType::Metallic)) {
+            imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Metallic);
+        } else {
+            imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Roughness);
+        }
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultMetallicRoughnessTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultMetallicRoughnessTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSets[currentFrame];
+    descriptorWrites[writeCount].dstBinding = 4;  // Metallic-roughness binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // Occlusion map
+    if (material.hasTexture(TextureType::AmbientOcclusion)) {
+        imageInfos[writeCount] = material.getTextureImageInfo(TextureType::AmbientOcclusion);
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultOcclusionTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultOcclusionTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSets[currentFrame];
+    descriptorWrites[writeCount].dstBinding = 5;  // Occlusion binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // Emissive map
+    if (material.hasTexture(TextureType::Emissive)) {
+        imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Emissive);
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultEmissiveTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultEmissiveTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSets[currentFrame];
+    descriptorWrites[writeCount].dstBinding = 6;  // Emissive binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // Update all descriptors at once
+    vkUpdateDescriptorSets(device, writeCount, descriptorWrites.data(), 0, nullptr);
+}
+
 void VulkanRenderer::updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo) {
     VkWriteDescriptorSet descriptorWrite{};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1043,7 +1344,473 @@ void VulkanRenderer::updateTextureDescriptor(const VkDescriptorImageInfo& imageI
     
     vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
 }
-// In VulkanRenderer.cpp, modify the cleanup method:
+void VulkanRenderer::createLightUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
+
+    lightUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    lightUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    lightUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        createBuffer(
+            bufferSize,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            lightUniformBuffers[i],
+            lightUniformBuffersMemory[i]
+        );
+
+        vkMapMemory(device, lightUniformBuffersMemory[i], 0, bufferSize, 0, &lightUniformBuffersMapped[i]);
+        
+        // Initialize with default values
+        LightUniformBuffer lightData{};
+        lightData.lightCount = 0;
+        lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
+        
+        memcpy(lightUniformBuffersMapped[i], &lightData, sizeof(lightData));
+    }
+}
+void VulkanRenderer::updateLights() {
+    LightUniformBuffer lightData{};
+    
+    // Get lights from scene
+    const auto& sceneLights = scene->getLights();
+    
+    // Limit to MAX_LIGHTS
+    lightData.lightCount = std::min(static_cast<int>(sceneLights.size()), MAX_LIGHTS);
+    
+    // Set ambient color
+    lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
+    
+    // Copy light data
+    for (int i = 0; i < lightData.lightCount; i++) {
+        const auto& light = sceneLights[i];
+        
+        // Position with w component indicating type
+        lightData.lights[i].position = glm::vec4(light.position, light.isDirectional ? 0.0f : 1.0f);
+        
+        // Color with intensity
+        lightData.lights[i].color = glm::vec4(light.color, light.intensity);
+        
+        // Other properties
+        lightData.lights[i].radius = light.radius;
+        lightData.lights[i].falloff = light.falloff;
+    }
+    
+    // Copy to uniform buffer
+    memcpy(lightUniformBuffersMapped[currentFrame], &lightData, sizeof(lightData));
+}
+
+void VulkanRenderer::setupIBL(const std::string& hdriPath) {
+    std::cout << "Setting up IBL with environment map: " << hdriPath << std::endl;
+    
+    // Create or load environment map (cubemap from equirectangular HDR)
+    environmentMap = TextureUtils::createEnvironmentCubemap(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicsQueue,
+        hdriPath
+    );
+    
+    // Create irradiance map for diffuse lighting by convolving the environment map
+    irradianceMap = TextureUtils::createIrradianceMap(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicsQueue,
+        environmentMap
+    );
+    
+    // Create prefiltered environment map for specular reflections
+    // This generates a mipmap chain where each level corresponds to a different roughness
+    prefilterMap = TextureUtils::createPrefilterMap(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicsQueue,
+        environmentMap
+    );
+    
+    // Create BRDF LUT for split-sum approximation
+    brdfLUT = TextureUtils::createBRDFLookUpTexture(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicsQueue,
+        512  // Resolution
+    );
+    
+    // Create descriptor set layout specifically for IBL resources
+    createIBLDescriptorSetLayout();
+    
+    // Allocate and update descriptor sets for IBL textures
+    createIBLDescriptorSets();
+    
+    // Create the PBR pipeline that supports IBL
+    createPBRPipeline();
+    
+    // Set the render mode to use IBL
+    renderMode = RenderMode::PBR_IBL;
+    
+    std::cout << "IBL setup complete. Using PBR_IBL render mode." << std::endl;
+}
+
+void VulkanRenderer::createIBLDescriptorSetLayout() {
+    // Create descriptor set layout for IBL textures
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    
+    // Irradiance map binding (diffuse IBL)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].pImmutableSamplers = nullptr;
+    
+    // Prefiltered environment map binding (specular IBL)
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].pImmutableSamplers = nullptr;
+    
+    // BRDF LUT binding (split-sum approximation)
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].pImmutableSamplers = nullptr;
+    
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &iblDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create IBL descriptor set layout!");
+    }
+    
+    std::cout << "Created IBL descriptor set layout" << std::endl;
+}
+
+void VulkanRenderer::createIBLDescriptorSets() {
+    // Make sure we have the necessary textures
+    if (!irradianceMap || !prefilterMap || !brdfLUT) {
+        throw std::runtime_error("IBL textures not initialized before creating descriptor sets!");
+    }
+
+    // Make sure the descriptor pool has enough space for IBL descriptors
+    // This assumes your descriptor pool has enough COMBINED_IMAGE_SAMPLER types
+    
+    // Allocate descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &iblDescriptorSetLayout;
+    
+    if (vkAllocateDescriptorSets(device, &allocInfo, &iblDescriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate IBL descriptor set!");
+    }
+    
+    // Update descriptor set with IBL textures
+    std::array<VkDescriptorImageInfo, 3> imageInfos{};
+    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+    
+    // Irradiance map
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[0].imageView = irradianceMap->getImageView();
+    imageInfos[0].sampler = irradianceMap->getSampler();
+    
+    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[0].dstSet = iblDescriptorSet;
+    descriptorWrites[0].dstBinding = 0;
+    descriptorWrites[0].dstArrayElement = 0;
+    descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[0].descriptorCount = 1;
+    descriptorWrites[0].pImageInfo = &imageInfos[0];
+    
+    // Prefiltered environment map
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[1].imageView = prefilterMap->getImageView();
+    imageInfos[1].sampler = prefilterMap->getSampler();
+    
+    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[1].dstSet = iblDescriptorSet;
+    descriptorWrites[1].dstBinding = 1;
+    descriptorWrites[1].dstArrayElement = 0;
+    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[1].descriptorCount = 1;
+    descriptorWrites[1].pImageInfo = &imageInfos[1];
+    
+    // BRDF LUT
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[2].imageView = brdfLUT->getImageView();
+    imageInfos[2].sampler = brdfLUT->getSampler();
+    
+    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[2].dstSet = iblDescriptorSet;
+    descriptorWrites[2].dstBinding = 2;
+    descriptorWrites[2].dstArrayElement = 0;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[2].descriptorCount = 1;
+    descriptorWrites[2].pImageInfo = &imageInfos[2];
+    
+    vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+    
+    std::cout << "Updated IBL descriptor set with all textures" << std::endl;
+}
+
+// Enhanced fragment shader to support IBL
+void VulkanRenderer::createPBRPipeline() {
+    std::cout << "Creating PBR pipeline..." << std::endl;
+    
+    // Load PBR shaders
+    auto vertCode = readFile("shaders/pbr_vert.spv");
+    auto fragCode = readFile("shaders/pbr_frag.spv");
+    
+    VkShaderModule vertModule = createShaderModule(vertCode);
+    VkShaderModule fragModule = createShaderModule(fragCode);
+    
+    // Create shader stages
+    VkPipelineShaderStageCreateInfo vertStage{};
+    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStage.module = vertModule;
+    vertStage.pName = "main";
+    
+    VkPipelineShaderStageCreateInfo fragStage{};
+    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragStage.module = fragModule;
+    fragStage.pName = "main";
+    
+    VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
+    
+    // Vertex input
+    auto bindingDesc = Vertex::getBindingDescription();
+    auto attrDescs = Vertex::getAttributeDescriptions();
+    
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attrDescs.data();
+    
+    // Input assembly
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+    
+    // Viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapChainExtent.width);
+    viewport.height = static_cast<float>(swapChainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapChainExtent;
+    
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    
+    // Rasterization
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+    
+    // Multisampling
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    
+    // Depth stencil
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+    
+    // Color blending
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = 
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | 
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+    
+    // Pipeline layout with descriptor sets for both main data and IBL
+    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts = {
+        descriptorSetLayout,   // Main descriptor set (materials, textures)
+        iblDescriptorSetLayout // IBL descriptor set
+    };
+    
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
+    pipelineLayoutInfo.pushConstantRangeCount = 0;
+    
+    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pbrPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create PBR pipeline layout!");
+    }
+    
+    // Create the graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = pbrPipelineLayout;
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+    
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pbrPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create PBR graphics pipeline!");
+    }
+    
+    // Clean up shader modules
+    vkDestroyShaderModule(device, vertModule, nullptr);
+    vkDestroyShaderModule(device, fragModule, nullptr);
+    
+    std::cout << "PBR pipeline created successfully" << std::endl;
+}
+
+
+
+
+void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
+    // Update lighting data first
+    updateLights();
+    
+    // Choose which pipeline to bind based on render mode
+    if (renderMode == RenderMode::Standard) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    } else {
+        // Use PBR pipeline for both PBR modes
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
+    }
+    
+    // Draw all meshes in the scene
+    if (scene) {
+        for (const auto& instance : scene->getMeshInstances()) {
+            // Get the model matrix for this instance
+            glm::mat4 model = instance.transform.getModelMatrix();
+            
+            // Update MVP matrices and camera position
+            UniformBufferObject ubo{};
+            ubo.model = model;
+            ubo.view = view;
+            ubo.proj = proj;
+            ubo.proj[1][1] *= -1; // Flip Y for Vulkan
+            ubo.cameraPos = cameraPos;
+            ubo.time = static_cast<float>(glfwGetTime()); // Current time for animations
+            
+            // Update the uniform buffer
+            memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
+            
+            // Update material properties
+            const Material& material = instance.mesh->getMaterial();
+            updateMaterialProperties(material);
+            
+            // Update all texture descriptors at once
+            updateAllTextureDescriptors(material);
+            
+            // Bind primary descriptor set with material/textures
+            vkCmdBindDescriptorSets(
+                commandBuffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                renderMode == RenderMode::Standard ? pipelineLayout : pbrPipelineLayout,
+                0, // First set index
+                1, // One descriptor set
+                &descriptorSets[currentFrame],
+                0, nullptr
+            );
+            
+            // If using IBL, bind the IBL descriptor set
+            if (renderMode == RenderMode::PBR_IBL) {
+                vkCmdBindDescriptorSets(
+                    commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pbrPipelineLayout,
+                    1, // Second set index
+                    1, // One descriptor set
+                    &iblDescriptorSet,
+                    0, nullptr
+                );
+            }
+            
+            // Draw the mesh
+            instance.mesh->bind(commandBuffer);
+            instance.mesh->draw(commandBuffer);
+        }
+    }
+}
+
+
+// Update draw function to bind IBL descriptors
+void VulkanRenderer::drawWithIBL(VkCommandBuffer commandBuffer) {
+    // Bind IBL descriptor set
+    vkCmdBindDescriptorSets(
+        commandBuffer,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        pbrPipelineLayout,   // Use the PBR pipeline layout
+        1,                   // Second descriptor set (index 1)
+        1,                   // Number of descriptor sets
+        &iblDescriptorSet,   // IBL descriptor set
+        0,                   // Dynamic offset count
+        nullptr              // Dynamic offsets
+    );
+    
+    // Rest of your drawing code...
+}
+
+// Clean up IBL resources
+void VulkanRenderer::cleanupIBL() {
+    environmentMap.reset();
+    irradianceMap.reset();
+    prefilterMap.reset();
+    brdfLUT.reset();
+    
+    vkDestroyDescriptorSetLayout(device, iblDescriptorSetLayout, nullptr);
+}
 
 void VulkanRenderer::cleanup() {
     // Wait for the device to finish operations before cleaning up
@@ -1051,10 +1818,19 @@ void VulkanRenderer::cleanup() {
 
     // Clean up default texture (add this line)
     defaultTexture.reset();
+    defaultAlbedoTexture.reset();
+    defaultNormalTexture.reset();
+    defaultMetallicRoughnessTexture.reset();
+    defaultOcclusionTexture.reset();
+    defaultEmissiveTexture.reset();
 
     // First cleanup the swap chain
     cleanupSwapChain();
-
+    // Cleanup material uniform buffers
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(device, materialUniformBuffers[i], nullptr);
+        vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
+    }
     // Cleanup depth resources
     vkDestroyImageView(device, depthImageView, nullptr);
     vkDestroyImage(device, depthImage, nullptr);

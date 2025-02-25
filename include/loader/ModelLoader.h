@@ -25,6 +25,12 @@ public:
     // Returns the loaded meshes
     const std::vector<MeshData>& GetMeshData() const { return meshes; }
 
+    /**
+ * Calculate tangents for a mesh
+ * Should be called after loading the mesh but before creating GPU buffers
+ */
+    void CalculateTangents(MeshData& meshData);
+
 private:
     // Recursively process each node in the FBX scene
     void ProcessNode(FbxNode* node, int indentLevel);

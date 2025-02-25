@@ -1,34 +1,91 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-// Uniform buffer with MVP matrices
+//------------------------------------------------------------------------------
+// Uniforms
+//------------------------------------------------------------------------------
 layout(binding = 0) uniform UniformBufferObject {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
+    mat4 model;           // Model matrix
+    mat4 view;            // View matrix
+    mat4 proj;            // Projection matrix
+    vec3 cameraPos;       // Camera position in world space
+    float time;           // Time for animations (if needed)
 } ubo;
 
-// Vertex attributes
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inColor;
-layout(location = 2) in vec3 inNormal;
-layout(location = 3) in vec2 inTexCoord;
+//------------------------------------------------------------------------------
+// Input Vertex Attributes
+//------------------------------------------------------------------------------
+layout(location = 0) in vec3 inPosition;    // Vertex position
+layout(location = 1) in vec3 inColor;       // Vertex color
+layout(location = 2) in vec3 inNormal;      // Vertex normal
+layout(location = 3) in vec2 inTexCoord;    // Texture coordinates
+layout(location = 4) in vec4 inTangent;     // Tangent vector (xyz) + handedness (w)
 
-// Outputs to fragment shader
-layout(location = 0) out vec3 fragColor;
-layout(location = 1) out vec2 fragTexCoord;
-layout(location = 2) out vec3 fragNormal;
+//------------------------------------------------------------------------------
+// Output to Fragment Shader
+//------------------------------------------------------------------------------
+layout(location = 0) out vec3 fragColor;        // Vertex color
+layout(location = 1) out vec2 fragTexCoord;     // Texture coordinates
+layout(location = 2) out vec3 fragNormal;       // World-space normal
+layout(location = 3) out vec3 fragPosition;     // World-space position
+layout(location = 4) out mat3 TBN;              // Tangent-Bitangent-Normal matrix
+layout(location = 7) out vec3 fragViewDir;      // View direction in tangent space
 
 void main() {
-    // Transform the vertex position
-    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
+    //--------------------------------------------------------------------------
+    // Position Transformation
+    //--------------------------------------------------------------------------
+    // Transform vertex to world space
+    vec4 worldPosition = ubo.model * vec4(inPosition, 1.0);
     
-    // Pass color, texture coordinates and normals to fragment shader
+    // Save world position for fragment shader
+    fragPosition = worldPosition.xyz;
+    
+    // Output clip space position
+    gl_Position = ubo.proj * ubo.view * worldPosition;
+    
+    //--------------------------------------------------------------------------
+    // Normal and Tangent Space Calculation
+    //--------------------------------------------------------------------------
+    // Calculate normal matrix (inverse transpose of model matrix's 3x3 part)
+    mat3 normalMatrix = transpose(inverse(mat3(ubo.model)));
+    
+    // Transform normal and tangent to world space
+    vec3 N = normalize(normalMatrix * inNormal);
+    vec3 T = normalize(normalMatrix * inTangent.xyz);
+    
+    // Ensure T is perpendicular to N using Gram-Schmidt process
+    // This fixes any imprecision that might have been introduced during
+    // transformation or from imperfect tangent input data
+    T = normalize(T - dot(T, N) * N);
+    
+    // Calculate bitangent using the handedness stored in tangent.w
+    // This ensures we maintain a consistent coordinate system
+    vec3 B = normalize(cross(N, T) * inTangent.w);
+    
+    // Create TBN matrix for normal mapping (transforms from tangent to world space)
+    TBN = mat3(T, B, N);
+    
+    //--------------------------------------------------------------------------
+    // View Direction Calculation
+    //--------------------------------------------------------------------------
+    // Calculate view direction in world space
+    vec3 worldViewDir = ubo.cameraPos - fragPosition;
+    
+    // Transform view direction to tangent space for parallax mapping
+    // and easier normal map calculations in the fragment shader
+    fragViewDir = normalize(transpose(TBN) * worldViewDir);
+    
+    //--------------------------------------------------------------------------
+    // Pass-through Attributes
+    //--------------------------------------------------------------------------
+    // Pass color to fragment shader 
+    // (may be used for vertex color blending or debug visualization)
     fragColor = inColor;
+    
+    // Pass texture coordinates to fragment shader
     fragTexCoord = inTexCoord;
     
-    // Transform the normal using the model matrix
-    // Note: for a proper normal transformation, you should use the inverse transpose
-    // of the model matrix, but this is simplified for now
-   fragNormal = transpose(inverse(mat3(ubo.model))) * inNormal;
+    // Pass normal for fragment shader use
+    fragNormal = N;
 }
