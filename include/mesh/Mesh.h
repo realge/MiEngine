@@ -1,12 +1,15 @@
 ﻿#pragma once
 #include <vulkan/vulkan.h>
 #include <vector>
+#include "../material/Material.h" 
 #include "../loader/ModelLoader.h"  // For MeshData
 
 class Mesh {
 public:
     // Construct a Mesh from loaded mesh data
-    Mesh(VkDevice device, VkPhysicalDevice physicalDevice, const MeshData& meshData);
+    Mesh(VkDevice device, VkPhysicalDevice physicalDevice, 
+      const MeshData& meshData, 
+      const Material& material = Material());
     ~Mesh();
 
     // Create GPU buffers for vertices and indices using provided command pool and graphics queue
@@ -18,10 +21,16 @@ public:
     // Issue draw command for this mesh
     void draw(VkCommandBuffer commandBuffer) const;
 
+    // Get mesh material
+    const Material& getMaterial() const { return material; }
+    
+    // Set mesh material
+    void setMaterial(const Material& newMaterial) { material = newMaterial; }
+
 private:
     VkDevice device;
     VkPhysicalDevice physicalDevice;
-
+    Material material;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;

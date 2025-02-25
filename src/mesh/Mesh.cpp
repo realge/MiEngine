@@ -3,15 +3,15 @@
 #include <stdexcept>
 #include <cstring>
 
-Mesh::Mesh(VkDevice device, VkPhysicalDevice physicalDevice, const MeshData& meshData)
+Mesh::Mesh(VkDevice device, VkPhysicalDevice physicalDevice, const MeshData& meshData, const Material& material)
     : device(device), physicalDevice(physicalDevice),
       vertexBuffer(VK_NULL_HANDLE), vertexBufferMemory(VK_NULL_HANDLE),
       indexBuffer(VK_NULL_HANDLE), indexBufferMemory(VK_NULL_HANDLE),
-      vertices(meshData.vertices), indices(meshData.indices)
+      vertices(meshData.vertices), indices(meshData.indices),
+      material(material)
 {
     indexCount = static_cast<uint32_t>(indices.size());
 }
-
 Mesh::~Mesh() {
     if (vertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(device, vertexBuffer, nullptr);
@@ -30,6 +30,11 @@ Mesh::~Mesh() {
 void Mesh::createBuffers(VkCommandPool commandPool, VkQueue graphicsQueue) {
     createVertexBuffer(commandPool, graphicsQueue);
     createIndexBuffer(commandPool, graphicsQueue);
+    //clear memeroy
+    vertices.clear();
+    vertices.shrink_to_fit();
+    indices.clear();
+    indices.shrink_to_fit();
 }
 
 void Mesh::createVertexBuffer(VkCommandPool commandPool, VkQueue graphicsQueue) {
@@ -76,7 +81,7 @@ void Mesh::createIndexBuffer(VkCommandPool commandPool, VkQueue graphicsQueue) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
     copyBuffer(commandPool, graphicsQueue, stagingBuffer, indexBuffer, bufferSize);
-
+   
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
 }
