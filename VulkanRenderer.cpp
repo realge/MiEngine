@@ -131,15 +131,21 @@ void VulkanRenderer::initVulkan() {
     modelTransform.scale = glm::vec3(19.5f);
 
 
-   
+    MaterialTexturePaths texturePaths;
+    texturePaths.diffuse = "texture/blackrat_color.png";  // Albedo/color texture
+    texturePaths.normal = "texture/blackrat_normal.png";  // Normal map if available
+    
     //scene->loadModel("models/models/blackrat.fbx", modelTransform);
-    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
+    //scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
     //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
     // scene->loadModel("models/test_model.fbx", modelTransform);
    // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
     //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
+
+    scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, modelTransform);
+    
     // Set up camera
     cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
     cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -733,22 +739,25 @@ void VulkanRenderer::drawFrame() {
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 void VulkanRenderer::createDescriptorSetLayout() {
-    // Existing uniform buffer binding
+    // Uniform buffer binding for MVP matrices
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    // Add texture sampler binding
-    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 1; // Different binding point
-    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerLayoutBinding.descriptorCount = 1;
-    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
+    // Diffuse/Albedo texture binding
+    VkDescriptorSetLayoutBinding diffuseBinding{};
+    diffuseBinding.binding = 1;
+    diffuseBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    diffuseBinding.descriptorCount = 1;
+    diffuseBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    
+    // For now, we'll just create the layout with the first two bindings
+    // TODO:: In a future update, we can add more texture bindings for full PBR
+    
     std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
-        uboLayoutBinding, samplerLayoutBinding
+        uboLayoutBinding, diffuseBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};

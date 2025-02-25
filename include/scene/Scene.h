@@ -3,12 +3,13 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <string>
 #include <glm/glm.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
 #include "../include/mesh/Mesh.h"
 #include "../include/loader/ModelLoader.h"
-#include "../include/texture/Texture.h"  // New include
+#include "../include/texture/Texture.h"
 
 // Forward declarations
 class VulkanRenderer;
@@ -30,6 +31,18 @@ struct Transform {
     }
 };
 
+// Structure to represent texture paths for a material
+struct MaterialTexturePaths {
+    std::string diffuse;
+    std::string normal;
+    std::string metallic;
+    std::string roughness;
+    std::string ambientOcclusion;
+    std::string emissive;
+    std::string height;
+    std::string specular;
+};
+
 // Struct to represent a mesh instance in the scene
 struct MeshInstance {
     std::shared_ptr<Mesh> mesh;
@@ -47,9 +60,14 @@ public:
     // Load a model and add all its meshes to the scene
     bool loadModel(const std::string& filename, const Transform& transform = Transform());
     
-    // New method: Load a model with a texture
+    // Load a model with a single texture
     bool loadTexturedModel(const std::string& modelFilename, const std::string& textureFilename, 
-                          const Transform& transform = Transform());
+                           const Transform& transform = Transform());
+    
+    // Load a model with multiple textures
+    bool loadTexturedModelPBR(const std::string& modelFilename, 
+                             const MaterialTexturePaths& texturePaths,
+                             const Transform& transform = Transform());
     
     // Add a single mesh instance to the scene
     void addMeshInstance(std::shared_ptr<Mesh> mesh, const Transform& transform = Transform());
@@ -71,8 +89,11 @@ private:
 
     // Helper to create mesh objects from loaded mesh data
     void createMeshesFromData(const std::vector<MeshData>& meshDataList, const Transform& transform, 
-                            const Material& material = Material());
+                             const Material& material = Material());
     
     // Load or retrieve a cached texture
     std::shared_ptr<Texture> loadTexture(const std::string& filename);
+    
+    // Create a material with multiple textures
+    Material createMaterialWithTextures(const MaterialTexturePaths& texturePaths);
 };

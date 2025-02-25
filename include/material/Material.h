@@ -1,21 +1,39 @@
 ﻿#pragma once
 #include <glm/glm.hpp>
 #include <memory>
+#include <unordered_map>
+
 #include "../texture/Texture.h"
+
+
+enum class TextureType {
+    Diffuse,      // Base color/albedo
+    Normal,       // Normal map
+    Metallic,     // Metallic map
+    Roughness,    // Roughness map
+    AmbientOcclusion, // Ambient occlusion map
+    Emissive,     // Emission map
+    Height,       // Height/displacement map
+    Specular      // Specular map (for non-PBR workflow)
+};
 
 struct Material {
     // Base properties
     glm::vec3 diffuseColor = glm::vec3(1.0f);
     float alpha = 1.0f;
     
-    // PBR properties (for future expansion)
+    // PBR properties
     float metallic = 0.0f;
     float roughness = 0.5f;
     glm::vec3 emissiveColor = glm::vec3(0.0f);
+    float emissiveStrength = 1.0f;
     
-    // Textures
+    // Legacy texture references for backward compatibility
     std::shared_ptr<Texture> diffuseTexture = nullptr;
     std::shared_ptr<Texture> normalTexture = nullptr;
+    
+    // New texture storage using enum as key
+    std::unordered_map<TextureType, std::shared_ptr<Texture>> textures;
     
     // Settings
     bool useTexture = false;
@@ -28,15 +46,60 @@ struct Material {
     
     // Constructor with texture
     Material(std::shared_ptr<Texture> texture) 
-        : diffuseTexture(texture), useTexture(texture != nullptr) {}
+        : diffuseTexture(texture), useTexture(texture != nullptr) {
+        if (texture) {
+            textures[TextureType::Diffuse] = texture;
+        }
+    }
+    
+    // Add a texture of specific type
+    void setTexture(TextureType type, std::shared_ptr<Texture> texture) {
+        textures[type] = texture;
         
-    // Get texture binding info for updating descriptor sets
+        // Update legacy references for compatibility
+        if (type == TextureType::Diffuse) {
+            diffuseTexture = texture;
+            useTexture = texture != nullptr;
+        }
+        else if (type == TextureType::Normal) {
+            normalTexture = texture;
+        }
+    }
+    
+    // Check if material has a specific texture type
+    bool hasTexture(TextureType type) const {
+        auto it = textures.find(type);
+        return it != textures.end() && it->second != nullptr;
+    }
+    
+    // Get a texture of specific type
+    std::shared_ptr<Texture> getTexture(TextureType type) const {
+        auto it = textures.find(type);
+        if (it != textures.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+    
+    // Get texture binding info for updating descriptor sets (for diffuse texture)
     VkDescriptorImageInfo getTextureImageInfo() const {
         VkDescriptorImageInfo imageInfo{};
         if (diffuseTexture) {
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfo.imageView = diffuseTexture->getImageView();
             imageInfo.sampler = diffuseTexture->getSampler();
+        }
+        return imageInfo;
+    }
+    
+    // Get texture binding info for a specific texture type
+    VkDescriptorImageInfo getTextureImageInfo(TextureType type) const {
+        VkDescriptorImageInfo imageInfo{};
+        auto texture = getTexture(type);
+        if (texture) {
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = texture->getImageView();
+            imageInfo.sampler = texture->getSampler();
         }
         return imageInfo;
     }

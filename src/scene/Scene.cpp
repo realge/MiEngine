@@ -1,6 +1,7 @@
 ﻿#include "../include/scene/Scene.h"
 #include "../VulkanRenderer.h"
 #include <iostream>
+#include <filesystem>
 
 Scene::Scene(VulkanRenderer* renderer) : renderer(renderer) {
 }
@@ -27,7 +28,7 @@ bool Scene::loadModel(const std::string& filename, const Transform& transform) {
 }
 
 bool Scene::loadTexturedModel(const std::string& modelFilename, const std::string& textureFilename, 
-                            const Transform& transform) {
+                             const Transform& transform) {
     if (!modelLoader.LoadModel(modelFilename)) {
         std::cerr << "Failed to load model: " << modelFilename << std::endl;
         return false;
@@ -56,7 +57,105 @@ bool Scene::loadTexturedModel(const std::string& modelFilename, const std::strin
     return true;
 }
 
+bool Scene::loadTexturedModelPBR(const std::string& modelFilename, 
+                               const MaterialTexturePaths& texturePaths,
+                               const Transform& transform) {
+    if (!modelLoader.LoadModel(modelFilename)) {
+        std::cerr << "Failed to load model: " << modelFilename << std::endl;
+        return false;
+    }
+    
+    const std::vector<MeshData>& meshDataList = modelLoader.GetMeshData();
+    if (meshDataList.empty()) {
+        std::cerr << "No meshes found in model: " << modelFilename << std::endl;
+        return false;
+    }
+    
+    // Create material with multiple textures
+    Material material = createMaterialWithTextures(texturePaths);
+    
+    // Create meshes with the material
+    createMeshesFromData(meshDataList, transform, material);
+    return true;
+}
+
+Material Scene::createMaterialWithTextures(const MaterialTexturePaths& texturePaths) {
+    Material material;
+    
+    // Load diffuse/albedo texture if provided
+    if (!texturePaths.diffuse.empty()) {
+        auto texture = loadTexture(texturePaths.diffuse);
+        if (texture) {
+            material.setTexture(TextureType::Diffuse, texture);
+        }
+    }
+    
+    // Load normal map if provided
+    if (!texturePaths.normal.empty()) {
+        auto texture = loadTexture(texturePaths.normal);
+        if (texture) {
+            material.setTexture(TextureType::Normal, texture);
+        }
+    }
+    
+    // Load metallic map if provided
+    if (!texturePaths.metallic.empty()) {
+        auto texture = loadTexture(texturePaths.metallic);
+        if (texture) {
+            material.setTexture(TextureType::Metallic, texture);
+        }
+    }
+    
+    // Load roughness map if provided
+    if (!texturePaths.roughness.empty()) {
+        auto texture = loadTexture(texturePaths.roughness);
+        if (texture) {
+            material.setTexture(TextureType::Roughness, texture);
+        }
+    }
+    
+    // Load ambient occlusion map if provided
+    if (!texturePaths.ambientOcclusion.empty()) {
+        auto texture = loadTexture(texturePaths.ambientOcclusion);
+        if (texture) {
+            material.setTexture(TextureType::AmbientOcclusion, texture);
+        }
+    }
+    
+    // Load emissive map if provided
+    if (!texturePaths.emissive.empty()) {
+        auto texture = loadTexture(texturePaths.emissive);
+        if (texture) {
+            material.setTexture(TextureType::Emissive, texture);
+        }
+    }
+    
+    // Load height/displacement map if provided
+    if (!texturePaths.height.empty()) {
+        auto texture = loadTexture(texturePaths.height);
+        if (texture) {
+            material.setTexture(TextureType::Height, texture);
+        }
+    }
+    
+    // Load specular map if provided
+    if (!texturePaths.specular.empty()) {
+        auto texture = loadTexture(texturePaths.specular);
+        if (texture) {
+            material.setTexture(TextureType::Specular, texture);
+        }
+    }
+    
+    return material;
+}
+
 std::shared_ptr<Texture> Scene::loadTexture(const std::string& filename) {
+    // Check if file exists
+    if (!std::filesystem::exists(filename)) {
+        std::cerr << "Texture file does not exist: " << filename << std::endl;
+        return nullptr;
+    }
+    
     // Check if texture is already loaded
     auto it = textureCache.find(filename);
     if (it != textureCache.end()) {
@@ -68,6 +167,7 @@ std::shared_ptr<Texture> Scene::loadTexture(const std::string& filename) {
     
     // Load texture from file
     if (!texture->loadFromFile(filename, renderer->getCommandPool(), renderer->getGraphicsQueue())) {
+        std::cerr << "Failed to load texture from file: " << filename << std::endl;
         return nullptr;
     }
     
