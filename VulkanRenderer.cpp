@@ -10,87 +10,7 @@ const uint32_t WIDTH = 1800;
 const uint32_t HEIGHT = 900;
 
 VulkanRenderer::VulkanRenderer() {
-    // Cube with 6 faces, 4 vertices per face, each face gets a unique color.
-    vertices = {
-        // Front face (z = +0.5)
-        { {-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f} }, // 0
-        { { 0.5f, -0.5f,  0.5f}, {0.0f, 1.0f, 0.0f} }, // 1
-        { { 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f} }, // 2
-        { {-0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 0.0f} }, // 3
-
-        // Back face (z = -0.5)
-        { { 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 1.0f} }, // 4
-        { {-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 1.0f} }, // 5
-        { {-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 1.0f} }, // 6
-        { { 0.5f,  0.5f, -0.5f}, {0.5f, 0.5f, 0.5f} }, // 7
-
-        // Left face (x = -0.5)
-        { {-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, 1.0f} }, // 8
-        { {-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f, 0.0f} }, // 9
-        { {-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f} }, // 10
-        { {-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 0.0f} }, // 11
-
-        // Right face (x = +0.5)
-        { { 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f} }, // 12
-        { { 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f} }, // 13
-        { { 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, 1.0f} }, // 14
-        { { 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 1.0f} }, // 15
-
-        // Top face (y = +0.5)
-        { {-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 1.0f} }, // 16
-        { { 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 1.0f} }, // 17
-        { { 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 0.0f} }, // 18
-        { {-0.5f,  0.5f, -0.5f}, {0.5f, 0.5f, 0.5f} }, // 19
-
-        // Bottom face (y = -0.5)
-        { {-0.5f, -0.5f, -0.5f}, {1.0f, 0.5f, 0.0f} }, // 20
-        { { 0.5f, -0.5f, -0.5f}, {0.5f, 1.0f, 0.0f} }, // 21
-        { { 0.5f, -0.5f,  0.5f}, {0.0f, 0.5f, 1.0f} }, // 22
-        { {-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.5f} }  // 23
-    };
-
-    // Define triangles for each face.
-    // (Each face: 2 triangles, 3 indices each, using clockwise winding per your pipeline setup)
-    indices = {
-        // Front face
-        0, 2, 1,  0, 3, 2,
-        // Back face
-        4, 6, 5,  4, 7, 6,
-        // Left face
-        8, 10, 9,  8, 11, 10,
-        // Right face
-        12, 14, 13,  12, 15, 14,
-        // Top face
-        16, 18, 17,  16, 19, 18,
-        // Bottom face
-        20, 22, 21,  20, 23, 22,
-    };
-
-    //============================================================================
-    if (!modelLoader.LoadModel("models/eyeball.fbx")) {
-        throw std::runtime_error("Failed to load FBX model!");
-    }
-    
-    // Get the mesh data
-    meshes = modelLoader.GetMeshData();
-
-
-    if (!modelLoader.LoadModel("models/test_model.fbx")) {
-        throw std::runtime_error("Failed to load FBX model!");
-    }
-    
-    if (meshes.empty()) {
-        throw std::runtime_error("No meshes found in FBX file!");
-    }
-    scene = std::make_unique<Scene>(this);
-    // Use the first mesh for now (you can extend this to handle multiple meshes)
-    vertices = meshes[0].vertices;
    
-    indices.clear();
-    indices.reserve(meshes[0].indices.size());
-    for (const auto& index : meshes[0].indices) {
-        indices.push_back(static_cast<uint16_t>(index));
-    }
 
 }
 
@@ -191,6 +111,10 @@ void VulkanRenderer::initVulkan() {
     createDepthResources();
     createFramebuffers();
     createCommandPool();
+    
+    // Create default texture before creating descriptor sets
+    createDefaultTexture();
+    
     createUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
@@ -202,21 +126,20 @@ void VulkanRenderer::initVulkan() {
 
     // Load initial models
     Transform modelTransform;
-    modelTransform.rotation = glm::vec3(0.0f, 0.0f, 0.0f);
-  
-    // Load the first model
-    if (!scene->loadModel("models/eyeball.fbx", modelTransform)) {
-        throw std::runtime_error("Failed to load primary model!");
-    }
-    modelTransform.scale = glm::vec3(0.5f, 0.5f, 0.5f);
-    if (!scene->loadModel("models/test_model.fbx", modelTransform)) {
-        throw std::runtime_error("Failed to load primary model!");
-    }
-    // Example of loading additional models with different transforms
-    Transform model2Transform;
-    
-    //scene->loadModel("models/test_model.fbx", model2Transform);
+    modelTransform.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
+    modelTransform.scale = glm::vec3(19.5f);
 
+
+   
+    //scene->loadModel("models/models/blackrat.fbx", modelTransform);
+    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
+    //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
+    //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
+    //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
+    // scene->loadModel("models/test_model.fbx", modelTransform);
+   // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
+    //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
     // Set up camera
     cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
     cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -451,21 +374,8 @@ void VulkanRenderer::createGraphicsPipeline() {
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
 
     // Vertex input: specify binding and attribute descriptions for our Vertex structure
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(Vertex);
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::vector<VkVertexInputAttributeDescription> attrDescs(2);
-    attrDescs[0].binding = 0;
-    attrDescs[0].location = 0;
-    attrDescs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-
-    attrDescs[0].offset = offsetof(Vertex, pos);
-    attrDescs[1].binding = 0;
-    attrDescs[1].location = 1;
-    attrDescs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attrDescs[1].offset = offsetof(Vertex, color);
+    auto bindingDesc = Vertex::getBindingDescription();
+    auto attrDescs = Vertex::getAttributeDescriptions();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -502,10 +412,10 @@ void VulkanRenderer::createGraphicsPipeline() {
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_LINE;//VK_POLYGON_MODE_FILL
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;;//VK_POLYGON_MODE_FILL
     rasterizer.lineWidth = 1.f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; //TODO: change to VK_CULL_MODE_BACK_BIT
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;;
+    rasterizer.cullMode = VK_CULL_MODE_NONE; //TODO: change to VK_CULL_MODE_BACK_BIT
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;//VK_FRONT_FACE_CLOCKWISE
     rasterizer.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -534,6 +444,15 @@ void VulkanRenderer::createGraphicsPipeline() {
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create pipeline layout!");
 
+  
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -545,16 +464,9 @@ void VulkanRenderer::createGraphicsPipeline() {
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
 
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create graphics pipeline!");
@@ -821,49 +733,36 @@ void VulkanRenderer::drawFrame() {
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 void VulkanRenderer::createDescriptorSetLayout() {
+    // Existing uniform buffer binding
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+    // Add texture sampler binding
+    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+    samplerLayoutBinding.binding = 1; // Different binding point
+    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
+        uboLayoutBinding, samplerLayoutBinding
+    };
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor set layout!");
     }
 }
 
-void VulkanRenderer::updateUniformBuffer(uint32_t currentImage) {
-    static auto startTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>
-        (currentTime - startTime).count();
 
-    UniformBufferObject ubo{};
-    // Rotate around Y axis
-    ubo.model = glm::rotate(glm::mat4(1.0f), rotationAngle, glm::vec3(0.0f, 1.0f, 0.0f));
-    // Add some rotation around X axis too
-    ubo.model = glm::rotate(ubo.model, rotationAngle * 0.5f, glm::vec3(1.0f, 0.0f, 0.0f));
-    
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f),    // Camera position
-                          glm::vec3(0.0f, 0.0f, 0.0f),      // Look at point
-                          glm::vec3(0.0f, 1.0f, 0.0f));     // Up vector
-    
-    ubo.proj = glm::perspective(glm::radians(45.0f),
-                               swapChainExtent.width / (float)swapChainExtent.height,
-                               0.1f, 10.0f);
-    
-    // GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted
-    ubo.proj[1][1] *= -1;
 
-    rotationAngle += 0.0003f; // Adjust this value to control rotation speed
-    
-    memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
-}
 void VulkanRenderer::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
@@ -885,14 +784,20 @@ void VulkanRenderer::createUniformBuffers() {
 }
 
 void VulkanRenderer::createDescriptorPool() {
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    
+    // Uniform buffer pool size
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    // Texture sampler pool size
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
@@ -901,6 +806,11 @@ void VulkanRenderer::createDescriptorPool() {
 }
 
 void VulkanRenderer::createDescriptorSets() {
+    // First, create the default texture if it doesn't exist
+    if (!defaultTexture) {
+        createDefaultTexture();
+    }
+
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -914,21 +824,40 @@ void VulkanRenderer::createDescriptorSets() {
     }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // Uniform buffer descriptor
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = uniformBuffers[i];
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(UniformBufferObject);
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = descriptorSets[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
+        // Default texture descriptor
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = defaultTexture->getImageView();
+        imageInfo.sampler = defaultTexture->getSampler();
 
-        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        
+        // Uniform buffer write
+        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[0].dstSet = descriptorSets[i];
+        descriptorWrites[0].dstBinding = 0;
+        descriptorWrites[0].dstArrayElement = 0;
+        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrites[0].descriptorCount = 1;
+        descriptorWrites[0].pBufferInfo = &bufferInfo;
+
+        // Texture sampler write
+        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[1].dstSet = descriptorSets[i];
+        descriptorWrites[1].dstBinding = 1;
+        descriptorWrites[1].dstArrayElement = 0;
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[1].descriptorCount = 1;
+        descriptorWrites[1].pImageInfo = &imageInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), 
+                             descriptorWrites.data(), 0, nullptr);
     }
 }
 
@@ -1086,9 +1015,33 @@ void VulkanRenderer::createDepthResources() {
 
     depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
+void VulkanRenderer::createDefaultTexture() {
+    // Create a 1x1 white texture as default
+    unsigned char whitePixel[4] = {255, 255, 255, 255};
+    
+    defaultTexture = std::make_shared<Texture>(device, physicalDevice);
+    defaultTexture->createFromPixels(whitePixel, 1, 1, 4, commandPool, graphicsQueue);
+}
+void VulkanRenderer::updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo) {
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSets[currentFrame];
+    descriptorWrite.dstBinding = 1; // Texture binding point
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+    
+    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+}
+// In VulkanRenderer.cpp, modify the cleanup method:
+
 void VulkanRenderer::cleanup() {
     // Wait for the device to finish operations before cleaning up
     vkDeviceWaitIdle(device);
+
+    // Clean up default texture (add this line)
+    defaultTexture.reset();
 
     // First cleanup the swap chain
     cleanupSwapChain();
@@ -1098,14 +1051,8 @@ void VulkanRenderer::cleanup() {
     vkDestroyImage(device, depthImage, nullptr);
     vkFreeMemory(device, depthImageMemory, nullptr);
 
-    // Cleanup scene (will be handled by smart pointer)
+    // Cleanup scene (this will clean up all meshes and textures)
     scene.reset();
-
-    // Cleanup vertex and index buffers
-    vkDestroyBuffer(device, vertexBuffer, nullptr);
-    vkFreeMemory(device, vertexBufferMemory, nullptr);
-    vkDestroyBuffer(device, indexBuffer, nullptr);
-    vkFreeMemory(device, indexBufferMemory, nullptr);
 
     // Cleanup uniform buffers
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {

@@ -15,6 +15,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "../include/Utils/CommonVertex.h"
+#include "include/texture/Texture.h"
 #include <set>
 
 #include "include/scene/Scene.h"
@@ -42,7 +43,20 @@ class VulkanRenderer
         glm::mat4 view;
         glm::mat4 proj;
     };
+public: //texture related
+    // Update texture descriptor
+    void updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo);
+    
+    // Get the current descriptor set
+    VkDescriptorSet getCurrentDescriptorSet() const { 
+        return descriptorSets[currentFrame]; 
+    }
+    
+  
 private:
+    std::shared_ptr<Texture> defaultTexture;
+    // Create a default white texture
+    void createDefaultTexture();
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
@@ -79,7 +93,7 @@ private:
     VkDescriptorPool descriptorPool;
     VkDescriptorSetLayout descriptorSetLayout;
     std::vector<VkDescriptorSet> descriptorSets;
-    ModelLoader modelLoader;
+
     std::vector<MeshData> meshes;
 
     std::unique_ptr<Scene> scene;
@@ -95,8 +109,7 @@ private:
     //====================================================================
     
    
-        VkBuffer indexBuffer;
-        VkDeviceMemory indexBufferMemory;
+    
         GLFWwindow* window;
         VkInstance instance;
         VkSurfaceKHR surface;
@@ -122,11 +135,8 @@ private:
         size_t currentFrame = 0;
         const int MAX_FRAMES_IN_FLIGHT = 2;
 
-        std::vector<Vertex> vertices;
-        std::vector<uint16_t> indices;
-        
-        VkBuffer vertexBuffer;
-        VkDeviceMemory vertexBufferMemory;
+  
+    
    
     public:
         VulkanRenderer();
@@ -155,7 +165,7 @@ private:
         void mainLoop();
         void drawFrame();
         void createDescriptorSetLayout();
-        void updateUniformBuffer(uint32_t currentImage);
+       
         void createUniformBuffers();
         void createDescriptorPool();
         void createDescriptorSets();

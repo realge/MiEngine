@@ -137,12 +137,23 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
             vertex.pos[2] = static_cast<float>(position[2]);
             
             // Get UV if available
+            // In ModelLoader.cpp, in the ProcessMesh function, modify the UV handling:
             if (mesh->GetElementUV(0)) {
                 FbxVector2 uv;
                 bool unmapped;
                 mesh->GetPolygonVertexUV(polygonIndex, vertexIndex, mesh->GetElementUV(0)->GetName(), uv, unmapped);
+    
+                // Store U coordinate as is
                 vertex.uv[0] = static_cast<float>(uv[0]);
-                vertex.uv[1] = static_cast<float>(uv[1]);
+    
+                // Flip the V coordinate for Vulkan
+                vertex.uv[1] = 1.0f - static_cast<float>(uv[1]);
+    
+                // Debug
+                if (vertices.size() < 10) {
+                    std::cout << "Original UV: (" << uv[0] << ", " << uv[1] << "), "
+                              << "Flipped UV: (" << vertex.uv[0] << ", " << vertex.uv[1] << ")" << std::endl;
+                }
             }
             
             // Get normal
