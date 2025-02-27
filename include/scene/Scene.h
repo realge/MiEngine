@@ -87,10 +87,19 @@ public:
     const glm::vec3& position,
     const glm::vec3& rotation,
     const glm::vec3& scale);
-    Material createPBRMaterial(const std::string& albedoPath, const std::string& normalPath,
-                               const std::string& metallicPath, const std::string& roughnessPath,
-                               const std::string& aoPath,
-                               const std::string& emissivePath, float metallic, float roughness);
+    Material createPBRMaterial(
+    const std::string& albedoPath,
+    const std::string& normalPath,
+    const std::string& metallicPath,
+    const std::string& roughnessPath,
+    const std::string& aoPath,
+    const std::string& emissivePath,
+    float metallic,
+    float roughness,
+    const glm::vec3& baseColor = glm::vec3(1.0f),
+    float emissiveStrength = 1.0f);
+    bool setupEnvironment(const std::string& hdriPath);
+    void createTestPBRScene();
     const std::vector<MeshInstance>& getMeshInstances() const;
 
 private:

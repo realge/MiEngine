@@ -1370,34 +1370,36 @@ void VulkanRenderer::createLightUniformBuffers() {
         memcpy(lightUniformBuffersMapped[i], &lightData, sizeof(lightData));
     }
 }
+// Update updateLights method in VulkanRenderer.cpp
 void VulkanRenderer::updateLights() {
+    // Get the lights from the scene
+    const auto& lights = scene->getLights();
+    
+    // Create and update the light uniform buffer
     LightUniformBuffer lightData{};
     
-    // Get lights from scene
-    const auto& sceneLights = scene->getLights();
+    // Set light count (clamped to MAX_LIGHTS)
+    lightData.lightCount = static_cast<int>(std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS)));
     
-    // Limit to MAX_LIGHTS
-    lightData.lightCount = std::min(static_cast<int>(sceneLights.size()), MAX_LIGHTS);
-    
-    // Set ambient color
+    // Set ambient light
     lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
     
-    // Copy light data
+    // Set light data for each light
     for (int i = 0; i < lightData.lightCount; i++) {
-        const auto& light = sceneLights[i];
+        const auto& light = lights[i];
         
-        // Position with w component indicating type
+        // Position (w=0 for directional, w=1 for point light)
         lightData.lights[i].position = glm::vec4(light.position, light.isDirectional ? 0.0f : 1.0f);
         
-        // Color with intensity
+        // Color and intensity
         lightData.lights[i].color = glm::vec4(light.color, light.intensity);
         
-        // Other properties
+        // Range and falloff
         lightData.lights[i].radius = light.radius;
         lightData.lights[i].falloff = light.falloff;
     }
     
-    // Copy to uniform buffer
+    // Update the light uniform buffer
     memcpy(lightUniformBuffersMapped[currentFrame], &lightData, sizeof(lightData));
 }
 
@@ -1566,13 +1568,13 @@ void VulkanRenderer::createPBRPipeline() {
     std::cout << "Creating PBR pipeline..." << std::endl;
     
     // Load PBR shaders
-    auto vertCode = readFile("shaders/pbr_vert.spv");
-    auto fragCode = readFile("shaders/pbr_frag.spv");
+    auto vertCode = readFile("shaders/pbr.vert.spv");
+    auto fragCode = readFile("shaders/pbr.frag.spv");
     
     VkShaderModule vertModule = createShaderModule(vertCode);
     VkShaderModule fragModule = createShaderModule(fragCode);
     
-    // Create shader stages
+    // Create shader stage info structures
     VkPipelineShaderStageCreateInfo vertStage{};
     vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1584,6 +1586,23 @@ void VulkanRenderer::createPBRPipeline() {
     fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragStage.module = fragModule;
     fragStage.pName = "main";
+    
+    // Add specialization constants for IBL
+    VkSpecializationMapEntry specMapEntry{};
+    specMapEntry.constantID = 0;
+    specMapEntry.offset = 0;
+    specMapEntry.size = sizeof(int);
+    
+    int useIBL = (renderMode == RenderMode::PBR_IBL) ? 1 : 0;
+    
+    VkSpecializationInfo specInfo{};
+    specInfo.mapEntryCount = 1;
+    specInfo.pMapEntries = &specMapEntry;
+    specInfo.dataSize = sizeof(int);
+    specInfo.pData = &useIBL;
+    
+    // Set specialization info for fragment shader
+    fragStage.pSpecializationInfo = &specInfo;
     
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
     
@@ -1669,6 +1688,17 @@ void VulkanRenderer::createPBRPipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
     
+    // Dynamic states
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+    
     // Pipeline layout with descriptor sets for both main data and IBL
     std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts = {
         descriptorSetLayout,   // Main descriptor set (materials, textures)
@@ -1697,6 +1727,7 @@ void VulkanRenderer::createPBRPipeline() {
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pbrPipelineLayout;
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
@@ -1717,70 +1748,78 @@ void VulkanRenderer::createPBRPipeline() {
 
 
 void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
-    // Update lighting data first
+    // Update lighting data
     updateLights();
     
-    // Choose which pipeline to bind based on render mode
-    if (renderMode == RenderMode::Standard) {
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    } else {
-        // Use PBR pipeline for both PBR modes
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
-    }
+    // Bind the appropriate pipeline
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
     
-    // Draw all meshes in the scene
-    if (scene) {
-        for (const auto& instance : scene->getMeshInstances()) {
-            // Get the model matrix for this instance
-            glm::mat4 model = instance.transform.getModelMatrix();
-            
-            // Update MVP matrices and camera position
-            UniformBufferObject ubo{};
-            ubo.model = model;
-            ubo.view = view;
-            ubo.proj = proj;
-            ubo.proj[1][1] *= -1; // Flip Y for Vulkan
-            ubo.cameraPos = cameraPos;
-            ubo.time = static_cast<float>(glfwGetTime()); // Current time for animations
-            
-            // Update the uniform buffer
-            memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
-            
-            // Update material properties
-            const Material& material = instance.mesh->getMaterial();
-            updateMaterialProperties(material);
-            
-            // Update all texture descriptors at once
-            updateAllTextureDescriptors(material);
-            
-            // Bind primary descriptor set with material/textures
+    // Set dynamic viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapChainExtent.width);
+    viewport.height = static_cast<float>(swapChainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+    
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapChainExtent;
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+    
+    // Render the scene
+    for (const auto& instance : scene->getMeshInstances()) {
+        // Calculate model matrix for this instance
+        glm::mat4 model = instance.transform.getModelMatrix();
+        
+        // Update MVP matrices and camera position
+        UniformBufferObject ubo{};
+        ubo.model = model;
+        ubo.view = view;
+        ubo.proj = proj;
+        ubo.proj[1][1] *= -1; // Flip Y for Vulkan
+        ubo.cameraPos = cameraPos;
+        ubo.time = static_cast<float>(glfwGetTime()); // Current time for animations
+        
+        // Copy UBO data to the mapped uniform buffer
+        memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
+        
+        // Update material properties
+        const Material& material = instance.mesh->getMaterial();
+        updateMaterialProperties(material);
+        
+        // Update texture descriptors
+        updateAllTextureDescriptors(material);
+        
+        // Bind primary descriptor set (materials, textures, etc.)
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pbrPipelineLayout,
+            0, // First set index
+            1, // Number of descriptor sets
+            &descriptorSets[currentFrame],
+            0, nullptr
+        );
+        
+        // If using IBL, bind the IBL descriptor set
+        if (renderMode == RenderMode::PBR_IBL) {
             vkCmdBindDescriptorSets(
                 commandBuffer,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                renderMode == RenderMode::Standard ? pipelineLayout : pbrPipelineLayout,
-                0, // First set index
-                1, // One descriptor set
-                &descriptorSets[currentFrame],
+                pbrPipelineLayout,
+                1, // Second set index
+                1, // Number of descriptor sets
+                &iblDescriptorSet,
                 0, nullptr
             );
-            
-            // If using IBL, bind the IBL descriptor set
-            if (renderMode == RenderMode::PBR_IBL) {
-                vkCmdBindDescriptorSets(
-                    commandBuffer,
-                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    pbrPipelineLayout,
-                    1, // Second set index
-                    1, // One descriptor set
-                    &iblDescriptorSet,
-                    0, nullptr
-                );
-            }
-            
-            // Draw the mesh
-            instance.mesh->bind(commandBuffer);
-            instance.mesh->draw(commandBuffer);
         }
+        
+        // Draw the mesh
+        instance.mesh->bind(commandBuffer);
+        instance.mesh->draw(commandBuffer);
     }
 }
 

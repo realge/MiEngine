@@ -3,6 +3,7 @@
 #include <iostream>
 #include <filesystem>
 
+
 Scene::Scene(VulkanRenderer* renderer) : renderer(renderer) {
 }
 
@@ -303,12 +304,16 @@ Material Scene::createPBRMaterial(
     const std::string& aoPath,
     const std::string& emissivePath,
     float metallic,
-    float roughness)
+    float roughness,
+    const glm::vec3& baseColor,
+    float emissiveStrength)
 {
     Material material;
     
-    // Set PBR scalar properties
+    // Set base color and PBR scalar properties
+    material.diffuseColor = baseColor;
     material.setPBRProperties(metallic, roughness);
+    material.emissiveStrength = emissiveStrength;
     
     // Load each texture if provided
     std::shared_ptr<Texture> albedoTex = albedoPath.empty() ? nullptr : loadTexture(albedoPath);
@@ -318,16 +323,35 @@ Material Scene::createPBRMaterial(
     std::shared_ptr<Texture> aoTex = aoPath.empty() ? nullptr : loadTexture(aoPath);
     std::shared_ptr<Texture> emissiveTex = emissivePath.empty() ? nullptr : loadTexture(emissivePath);
     
-    // If both metallic and roughness are provided, combine them into a single texture
+    // If both metallic and roughness are provided, we could combine them
     std::shared_ptr<Texture> metallicRoughnessTex = nullptr;
     if (metallicTex && roughnessTex) {
-        metallicRoughnessTex = material.createCombinedMetallicRoughnessTexture(
+        // Try to create a combined texture
+        metallicRoughnessTex = TextureUtils::combineMetallicRoughness(
             renderer->getDevice(),
             renderer->getPhysicalDevice(),
             renderer->getCommandPool(),
             renderer->getGraphicsQueue(),
             metallicTex,
-            roughnessTex
+            roughnessTex,
+            metallic,
+            roughness
+        );
+    } else if (metallicTex) {
+        // Just use metallic texture if only that's available
+        metallicRoughnessTex = metallicTex;
+    } else if (roughnessTex) {
+        // Just use roughness texture if only that's available
+        metallicRoughnessTex = roughnessTex;
+    } else if (metallic >= 0.0f && roughness >= 0.0f) {
+        // Create a default texture with the provided scalar values
+        metallicRoughnessTex = TextureUtils::createDefaultMetallicRoughnessMap(
+            renderer->getDevice(),
+            renderer->getPhysicalDevice(),
+            renderer->getCommandPool(),
+            renderer->getGraphicsQueue(),
+            metallic,
+            roughness
         );
     }
     
@@ -335,8 +359,8 @@ Material Scene::createPBRMaterial(
     material.setPBRTextures(
         albedoTex,
         normalTex,
-        metallicRoughnessTex ? metallicRoughnessTex : metallicTex,
-        metallicRoughnessTex ? nullptr : roughnessTex,  // Don't set roughness if combined
+        metallicRoughnessTex,     // Will contain combined or individual metallic/roughness
+        nullptr,                  // Not needed if we have combined texture
         aoTex,
         emissiveTex
     );
@@ -344,9 +368,133 @@ Material Scene::createPBRMaterial(
     return material;
 }
 
+bool Scene::setupEnvironment(const std::string& hdriPath) {
+    if (!renderer) {
+        std::cerr << "Renderer not initialized" << std::endl;
+        return false;
+    }
+    
+    // Set up IBL with the given HDRI environment map
+    try {
+        renderer->setupIBL(hdriPath);
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to set up environment: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+
+
+void Scene::createTestPBRScene() {
+    // Clear any existing objects
+    meshInstances.clear();
+    
+    // Setup default lighting
+    setupDefaultLighting();
+    
+    // Create a grid of spheres with different metallic/roughness values
+    // Row = roughness
+    // Column = metallic
+    
+    MaterialTexturePaths texturePaths;
+    // Leave textures empty to use scalar values
+    
+    // Create a grid of spheres, 5x5
+    for (int row = 0; row < 5; row++) {
+        float roughness = row / 4.0f;
+        
+        for (int col = 0; col < 5; col++) {
+            float metallic = col / 4.0f;
+            
+            Transform transform;
+            transform.position = glm::vec3(
+                (col - 2) * 1.5f,  // X position
+                (row - 2) * 1.5f,  // Y position
+                0.0f               // Z position
+            );
+            transform.scale = glm::vec3(0.75f); // Sphere size
+            
+            // Create material with varying metallic/roughness values
+            Material material = createPBRMaterial(
+                "",             // No albedo texture
+                "",             // No normal texture
+                "",             // No metallic texture
+                "",             // No roughness texture
+                "",             // No ao texture
+                "",             // No emissive texture
+                metallic,       // Metallic value
+                roughness,      // Roughness value
+                glm::vec3(0.95f, 0.95f, 0.95f),  // Neutral base color
+                0.0f            // No emission
+            );
+            
+            // Load sphere model with this material
+            // Note: You'll need a sphere model in your assets
+            std::vector<MeshData> sphereMeshData;
+            if (modelLoader.LoadModel("models/sphere.fbx")) {
+                sphereMeshData = modelLoader.GetMeshData();
+                createMeshesFromData(sphereMeshData, transform, material);
+            }
+        }
+    }
+    
+    // Add a larger sphere in the back to showcase environment reflections
+    Transform mirrorSphereTransform;
+    mirrorSphereTransform.position = glm::vec3(0.0f, 0.0f, -5.0f);
+    mirrorSphereTransform.scale = glm::vec3(2.5f);
+    
+    Material mirrorMaterial = createPBRMaterial(
+        "",             // No albedo texture
+        "",             // No normal texture
+        "",             // No metallic texture
+        "",             // No roughness texture
+        "",             // No ao texture
+        "",             // No emissive texture
+        1.0f,           // Fully metallic
+        0.1f,           // Very smooth
+        glm::vec3(0.95f, 0.95f, 0.95f),  // Neutral base color
+        0.0f            // No emission
+    );
+    
+    std::vector<MeshData> mirrorSphereMeshData;
+    if (modelLoader.LoadModel("models/sphere.fbx")) {
+        mirrorSphereMeshData = modelLoader.GetMeshData();
+        createMeshesFromData(mirrorSphereMeshData, mirrorSphereTransform, mirrorMaterial);
+    }
+    
+    // Add a floor
+    Transform floorTransform;
+    floorTransform.position = glm::vec3(0.0f, -4.0f, 0.0f);
+    floorTransform.scale = glm::vec3(10.0f, 0.1f, 10.0f);
+    
+    Material floorMaterial = createPBRMaterial(
+        "textures/floor_albedo.jpg",
+        "textures/floor_normal.jpg",
+        "",
+        "textures/floor_roughness.jpg",
+        "textures/floor_ao.jpg",
+        "",
+        0.0f,           // Non-metallic
+        1.0f,           // Default roughness (will be overridden by texture)
+        glm::vec3(0.9f, 0.9f, 0.9f),  // Base color
+        0.0f            // No emission
+    );
+    
+    std::vector<MeshData> floorMeshData;
+    if (modelLoader.LoadModel("models/plane.fbx")) {
+        floorMeshData = modelLoader.GetMeshData();
+        createMeshesFromData(floorMeshData, floorTransform, floorMaterial);
+    }
+    
+    // Set up environment mapping
+    setupEnvironment("textures/environment.hdr");
+}
+
 const std::vector<MeshInstance>& Scene::getMeshInstances() const {
     return meshInstances;
 }
+
 
 void Scene::clearLights() {
     lights.clear();
