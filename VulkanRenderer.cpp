@@ -986,6 +986,7 @@ void VulkanRenderer::createDescriptorSets() {
         descriptorWrites[1].dstBinding = 1;
         descriptorWrites[1].dstArrayElement = 0;
         descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        
         descriptorWrites[1].descriptorCount = 1;
         descriptorWrites[1].pBufferInfo = &materialBufferInfo;
 

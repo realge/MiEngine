@@ -8,6 +8,9 @@ const float PI = 3.14159265359;
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormal;
+layout(location = 3) in vec3 fragPosition;  // Added
+layout(location = 4) in mat3 TBN;           // Added (uses locations 4, 5, 6)
+layout(location = 7) in vec3 fragViewDir; 
 
 // Texture samplers - using your existing binding points
 layout(binding = 1) uniform sampler2D texSampler; // Diffuse/Albedo
