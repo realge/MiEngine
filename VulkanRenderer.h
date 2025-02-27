@@ -60,7 +60,32 @@ struct MaterialUniformBuffer {
 
 class VulkanRenderer
 {
-   
+#ifdef NDEBUG
+    const bool enableValidationLayers = false;
+#else
+    const bool enableValidationLayers = true;
+#endif
+
+    
+    //==================================================================== debugging
+    const std::vector<const char*> validationLayers = {
+        "VK_LAYER_KHRONOS_validation"
+    };
+
+    // Debug messenger handle
+    VkDebugUtilsMessengerEXT debugMessenger;
+
+    // Helper function prototypes
+    bool checkValidationLayerSupport();
+    void setupDebugMessenger();
+    VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, 
+                                          const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, 
+                                          const VkAllocationCallbacks* pAllocator, 
+                                          VkDebugUtilsMessengerEXT* pDebugMessenger);
+    void DestroyDebugUtilsMessengerEXT(VkInstance instance, 
+                                      VkDebugUtilsMessengerEXT debugMessenger, 
+                                      const VkAllocationCallbacks* pAllocator);
+    void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
     //====================================================================
     struct UniformBufferObject {
         glm::mat4 model;
@@ -72,6 +97,8 @@ class VulkanRenderer
 public: //texture related
     // Update texture descriptor
     void updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo);
+    void testPBRRendering();
+    void createPBRTestGrid();
     
     // Get the current descriptor set
     VkDescriptorSet getCurrentDescriptorSet() const { 

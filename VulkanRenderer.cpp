@@ -102,6 +102,7 @@ VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& avai
 
 void VulkanRenderer::initVulkan() {
     createInstance();
+    setupDebugMessenger();
     createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
@@ -110,13 +111,14 @@ void VulkanRenderer::initVulkan() {
     createRenderPass();
     createDescriptorSetLayout();
     createGraphicsPipeline();
+    //createPBRPipeline();
     createDepthResources();
     createFramebuffers();
     createCommandPool();
     
     // Create default textures first
     createDefaultTextures();
-    
+    //createLightUniformBuffers();
     // Create uniform buffers
     createUniformBuffers();
     createMaterialUniformBuffers(); // Add this line
@@ -133,15 +135,15 @@ void VulkanRenderer::initVulkan() {
     Transform modelTransform;
     modelTransform.position = glm::vec3(0.0f, 0.0f, 0.0f);
     //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
-    modelTransform.scale = glm::vec3(19.5f);
+    modelTransform.scale = glm::vec3(19.0f);
 
 
     MaterialTexturePaths texturePaths;
     texturePaths.diffuse = "texture/blackrat_color.png";  // Albedo/color texture
     texturePaths.normal = "texture/blackrat_normal.png";  // Normal map if available
-    
+    MaterialTexturePaths texturePaths1;
     //scene->loadModel("models/models/blackrat.fbx", modelTransform);
-    //scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
+    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
     //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
@@ -149,7 +151,18 @@ void VulkanRenderer::initVulkan() {
    // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
     //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
 
-    scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, modelTransform);
+    //scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, modelTransform);
+    //scene->loadTexturedModelPBR("models/eye.fbx", texturePaths1, modelTransform);
+
+    //testPBRRendering();
+    // or
+    // createPBRTestGrid();
+    
+    // Make sure PBR pipeline is created if not done elsewhere
+    
+    
+    // Set the render mode to PBR
+    renderMode = RenderMode::Standard;
     
     // Set up camera
     cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
@@ -158,11 +171,17 @@ void VulkanRenderer::initVulkan() {
     fov = 90.0f;
     nearPlane = 0.1f;
     farPlane = 10.0f;
+    
+    
 }
 void VulkanRenderer::createInstance() {
+    if (enableValidationLayers && !checkValidationLayerSupport()) {
+        throw std::runtime_error("validation layers requested, but not available!");
+    }
+
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Vulkan 2D Square";
+    appInfo.pApplicationName = "Vulkan 3D Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -172,14 +191,40 @@ void VulkanRenderer::createInstance() {
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    // Get required GLFW extensions
+    // Get required extensions
+    std::vector<const char*> extensions;
     uint32_t glfwExtCount = 0;
-    const char** glfwExt = glfwGetRequiredInstanceExtensions(&glfwExtCount);
-    createInfo.enabledExtensionCount = glfwExtCount;
-    createInfo.ppEnabledExtensionNames = glfwExt;
+    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+    
+    for (uint32_t i = 0; i < glfwExtCount; i++) {
+        extensions.push_back(glfwExtensions[i]);
+    }
+    
+    // Add debug extension when validation layers are enabled
+    if (enableValidationLayers) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+    
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.data();
 
-    if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS)
+    // Add validation layers if enabled
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    if (enableValidationLayers) {
+        createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+        createInfo.ppEnabledLayerNames = validationLayers.data();
+        
+        // Setup debug messenger for instance creation/destruction
+        populateDebugMessengerCreateInfo(debugCreateInfo);
+        createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
+    } else {
+        createInfo.enabledLayerCount = 0;
+        createInfo.pNext = nullptr;
+    }
+
+    if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
         throw std::runtime_error("failed to create instance!");
+    }
 }
 
 void VulkanRenderer::createSurface() {
@@ -219,8 +264,8 @@ void VulkanRenderer::createLogicalDevice() {
         queueInfo.pQueuePriorities = &priority;
         queueCreateInfos.push_back(queueInfo);
     }
-
     VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy=VK_TRUE;
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -512,8 +557,10 @@ void VulkanRenderer::createFramebuffers() {
 void VulkanRenderer::createCommandPool() {
     auto indices = findQueueFamilies(physicalDevice);
     VkCommandPoolCreateInfo poolInfo{};
+    
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.queueFamilyIndex = indices.graphicsFamily.value();
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS)
         throw std::runtime_error("failed to create command pool!");
 }
@@ -652,10 +699,9 @@ void VulkanRenderer::drawFrame() {
     // Reset the fence only if we are submitting work
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
-    // Reset and begin command buffer (if using dynamic command buffer recording)
+    // Reset and begin command buffer
     vkResetCommandBuffer(commandBuffers[imageIndex], 0);
     
-    // Record the command buffer (if using dynamic command buffer recording)
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = 0;
@@ -682,18 +728,36 @@ void VulkanRenderer::drawFrame() {
     // Record commands
     vkCmdBeginRenderPass(commandBuffers[imageIndex], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     
-    // Bind pipeline and descriptor sets
-    vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
-
-    // Draw scene
-    if (scene) {
-        glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, cameraUp);
-        glm::mat4 proj = glm::perspective(glm::radians(fov),
-            swapChainExtent.width / (float)swapChainExtent.height,
-            nearPlane, farPlane);
-        scene->draw(commandBuffers[imageIndex], view, proj);
+    // Calculate view and projection matrices
+    glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, cameraUp);
+    glm::mat4 proj = glm::perspective(glm::radians(fov),
+        swapChainExtent.width / (float)swapChainExtent.height,
+        nearPlane, farPlane);
+    
+    // Choose rendering path based on render mode
+    if (renderMode == RenderMode::PBR || renderMode == RenderMode::PBR_IBL) {
+        // Update lights for PBR
+        updateLights();
+        
+        // Use PBR rendering pipeline
+        drawWithPBR(commandBuffers[imageIndex], view, proj);
+        
+        // If IBL is enabled and IBL descriptor sets are available, bind them
+        if (renderMode == RenderMode::PBR_IBL && iblDescriptorSet != VK_NULL_HANDLE) {
+            drawWithIBL(commandBuffers[imageIndex]);
+        }
+    } else {
+        // Use standard pipeline
+        vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        
+        // Bind descriptor set
+        vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+        
+        // Draw scene with standard pipeline
+        if (scene) {
+            scene->draw(commandBuffers[imageIndex], view, proj);
+        }
     }
 
     vkCmdEndRenderPass(commandBuffers[imageIndex]);
@@ -756,7 +820,8 @@ void VulkanRenderer::createDescriptorSetLayout() {
 
     // 1: Material UBO binding
     bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[1].pImmutableSamplers = nullptr;
@@ -988,20 +1053,40 @@ void VulkanRenderer::updateMVPMatrices(const glm::mat4& model, const glm::mat4& 
 }
 
 void VulkanRenderer::cleanupSwapChain() {
+    // Destroy depth resources
+    vkDestroyImageView(device, depthImageView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthImageMemory, nullptr);
+
+    // Destroy framebuffers
     for (auto framebuffer : swapChainFramebuffers) {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
 
+    // Free command buffers
     vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
 
+    // Destroy pipelines and layouts
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    
+    // Also destroy PBR pipeline if it exists
+    if (pbrPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, pbrPipeline, nullptr);
+    }
+    if (pbrPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, pbrPipelineLayout, nullptr);
+    }
+
+    // Destroy render pass
     vkDestroyRenderPass(device, renderPass, nullptr);
 
+    // Destroy swap chain image views
     for (auto imageView : swapChainImageViews) {
         vkDestroyImageView(device, imageView, nullptr);
     }
 
+    // Destroy swap chain
     vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
 
@@ -1025,8 +1110,13 @@ void VulkanRenderer::recreateSwapChain() {
     createImageViews();
     createRenderPass();
     createGraphicsPipeline();
-    // createDepthResources(); // If you have depth buffer
+    createDepthResources(); // If you have depth buffer
+    createPBRPipeline();
     createFramebuffers();
+    // Recreate PBR pipeline if needed
+    if (renderMode == RenderMode::PBR || renderMode == RenderMode::PBR_IBL) {
+        createPBRPipeline();
+    }
     createCommandBuffers();
 }
 
@@ -1085,7 +1175,7 @@ void VulkanRenderer::createImage(uint32_t width, uint32_t height, VkFormat forma
     imageInfo.usage = usage;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
+    
     if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
         throw std::runtime_error("failed to create image!");
     }
@@ -1700,21 +1790,28 @@ void VulkanRenderer::createPBRPipeline() {
     dynamicState.pDynamicStates = dynamicStates.data();
     
     // Pipeline layout with descriptor sets for both main data and IBL
-    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts = {
+    std::array<VkDescriptorSetLayout, 1> descriptorSetLayouts = {
         descriptorSetLayout,   // Main descriptor set (materials, textures)
-        iblDescriptorSetLayout // IBL descriptor set
+        //iblDescriptorSetLayout // IBL descriptor set not implemented yet
     };
+    
     
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    std::cout << "is this where the error happens? = " << descriptorSetLayouts.size() << std::endl;
     pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pipelineLayoutInfo.pushConstantRangeCount = 8; //TODO: gotta make a proper push constant struct referecing frag shader file
+  
+    pipelineLayoutInfo.pPushConstantRanges=&pushConstantRange;
+    std::cout << "is this where the error happens?2 = " << descriptorSetLayouts.size() << std::endl;
     if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pbrPipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create PBR pipeline layout!");
     }
-    
+    std::cout << "is this where the error happens?3 = " << descriptorSetLayouts.size() << std::endl;
     // Create the graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1854,8 +1951,33 @@ void VulkanRenderer::cleanupIBL() {
 void VulkanRenderer::cleanup() {
     // Wait for the device to finish operations before cleaning up
     vkDeviceWaitIdle(device);
+    if (enableValidationLayers) {
+        DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+    }
+    // First cleanup the swap chain (this handles framebuffers, pipelines, etc.)
+    cleanupSwapChain();
 
-    // Clean up default texture (add this line)
+    // Cleanup uniform buffers
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // Cleanup material uniform buffers
+        vkDestroyBuffer(device, materialUniformBuffers[i], nullptr);
+        vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
+        
+        // Cleanup light uniform buffers
+        vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
+        vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
+        
+        // Cleanup MVP uniform buffers
+        vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+        vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+    }
+
+    // Cleanup IBL resources
+    if (renderMode == RenderMode::PBR_IBL) {
+        cleanupIBL();
+    }
+
+    // Cleanup default textures
     defaultTexture.reset();
     defaultAlbedoTexture.reset();
     defaultNormalTexture.reset();
@@ -1863,30 +1985,17 @@ void VulkanRenderer::cleanup() {
     defaultOcclusionTexture.reset();
     defaultEmissiveTexture.reset();
 
-    // First cleanup the swap chain
-    cleanupSwapChain();
-    // Cleanup material uniform buffers
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, materialUniformBuffers[i], nullptr);
-        vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
+    // Cleanup descriptor pool and layouts
+    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+    
+    // If IBL is used, also destroy its descriptor set layout
+    if (iblDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, iblDescriptorSetLayout, nullptr);
     }
-    // Cleanup depth resources
-    vkDestroyImageView(device, depthImageView, nullptr);
-    vkDestroyImage(device, depthImage, nullptr);
-    vkFreeMemory(device, depthImageMemory, nullptr);
 
     // Cleanup scene (this will clean up all meshes and textures)
     scene.reset();
-
-    // Cleanup uniform buffers
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-        vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
-    }
-
-    // Cleanup descriptor pool and layout
-    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
     // Cleanup synchronization objects
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1910,4 +2019,178 @@ void VulkanRenderer::cleanup() {
     // Cleanup window
     glfwDestroyWindow(window);
     glfwTerminate();
+}
+
+
+bool VulkanRenderer::checkValidationLayerSupport() {
+    uint32_t layerCount;
+    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+
+    std::vector<VkLayerProperties> availableLayers(layerCount);
+    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+
+    for (const char* layerName : validationLayers) {
+        bool layerFound = false;
+
+        for (const auto& layerProperties : availableLayers) {
+            if (strcmp(layerName, layerProperties.layerName) == 0) {
+                layerFound = true;
+                break;
+            }
+        }
+
+        if (!layerFound) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Debug callback function
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData) {
+
+    std::cerr << "Validation layer: " << pCallbackData->pMessage << std::endl;
+
+    // Return false to indicate the error should not be aborted
+    return VK_FALSE;
+}
+
+VkResult VulkanRenderer::CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger) {
+    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    } else {
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+}
+
+void VulkanRenderer::DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
+    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        func(instance, debugMessenger, pAllocator);
+    }
+}
+
+void VulkanRenderer::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
+    createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = debugCallback;
+}
+
+void VulkanRenderer::setupDebugMessenger() {
+    if (!enableValidationLayers) return;
+
+    VkDebugUtilsMessengerCreateInfoEXT createInfo;
+    populateDebugMessengerCreateInfo(createInfo);
+
+    if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
+        throw std::runtime_error("failed to set up debug messenger!");
+    }
+}
+
+
+// TODO: delete this later it just for testing
+void VulkanRenderer::testPBRRendering() {
+    // 1. Create a simple test scene with spheres
+    Transform sphereTransform;
+    sphereTransform.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    sphereTransform.scale = glm::vec3(19.0f);
+    
+    // 2. Create a basic PBR material
+    Material pbrMaterial;
+    pbrMaterial.diffuseColor = glm::vec3(0.7f, 0.9f, 0.3f);  // Red
+    pbrMaterial.setPBRProperties(0.5f, 0.3f);  // Medium metallic, somewhat smooth
+    
+    // 3. Load a sphere model with this material
+    // You can use any simple model you have available
+    MaterialTexturePaths texturePaths;
+    texturePaths.diffuse = "texture/blackrat_color.png";  // Albedo/color texture
+    texturePaths.normal = "texture/blackrat_normal.png";  // Normal map if available
+    texturePaths.roughness ="texture/blackrat_rough.png";
+    texturePaths.specular ="texture/blackrat_spec.png";
+    //scene->loadTexturedModel("models/house.fbx","texture/house.png", sphereTransform);
+    scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, sphereTransform);
+    // Assuming your last loaded model is accessible, set its material
+    /*auto& instances = scene->getMeshInstances();
+    if (!instances.empty()) {
+        instances.back().mesh->setMaterial(pbrMaterial);
+    }*/
+    
+    // 4. Set up lighting - one key light, one fill light
+   
+    scene->clearLights();
+    scene->addLight(
+        glm::vec3(5.0f, 5.0f, 5.0f),  // Position
+        glm::vec3(1.0f, 1.0f, 1.0f),  // White color
+        5.0f,                         // Higher intensity
+        20.0f,                        // Larger radius
+        1.0f,
+        false
+    );
+    
+    // 5. Position camera for a good view
+    cameraPos = glm::vec3(0.0f, 0.0f, 3.0f);
+    cameraTarget = glm::vec3(0.0f);
+    cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    
+    // 6. Make sure PBR rendering mode is active
+    renderMode = RenderMode::PBR;
+}
+// TODO: delete this later it just for testing
+void VulkanRenderer::createPBRTestGrid() {
+    // Create a 5x5 grid of spheres with varying metallic/roughness values
+    const int GRID_SIZE = 5;
+    const float SPACING = 1.5f;
+    const float START_POS = -((GRID_SIZE-1) * SPACING) / 2.0f;
+    
+    for (int x = 0; x < GRID_SIZE; x++) {
+        for (int y = 0; y < GRID_SIZE; y++) {
+            // Calculate metallic/roughness based on position
+            float metallic = static_cast<float>(x) / (GRID_SIZE - 1);
+            float roughness = static_cast<float>(y) / (GRID_SIZE - 1);
+            
+            // Create transform for this sphere
+            Transform transform;
+            transform.position = glm::vec3(
+                START_POS + x * SPACING, 
+                START_POS + y * SPACING, 
+                0.0f
+            );
+            transform.scale = glm::vec3(0.4f);
+            
+            // Create material with varying properties
+            Material material;
+            material.diffuseColor = glm::vec3(0.7f, 0.2f, 0.2f); // Base red color
+            material.setPBRProperties(metallic, roughness);
+            
+            // Load sphere with this material
+            scene->loadModel("models/sphere.fbx", transform);
+            auto& instances = scene->getMeshInstances();
+            if (!instances.empty()) {
+                instances.back().mesh->setMaterial(material);
+            }
+        }
+    }
+    
+    // Set up 3-point lighting
+    scene->clearLights();
+    scene->addLight(glm::vec3(10.0f, 10.0f, 10.0f), glm::vec3(1.0f), 4.0f, 20.0f, 1.0f, false); // Key
+    scene->addLight(glm::vec3(-8.0f, 4.0f, 8.0f), glm::vec3(0.3f, 0.4f, 0.6f), 2.0f, 15.0f, 1.0f, false); // Fill
+    scene->addLight(glm::vec3(0.0f, -5.0f, -5.0f), glm::vec3(0.2f), 1.0f, 10.0f, 1.0f, false); // Rim
+    
+    // Position camera to see the whole grid
+    cameraPos = glm::vec3(0.0f, 0.0f, 10.0f);
+    cameraTarget = glm::vec3(0.0f);
+    fov = 45.0f; // Narrower FOV to see details better
 }

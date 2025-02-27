@@ -72,36 +72,15 @@ void ModelLoader::ProcessNode(FbxNode* node, int indentLevel) {
     if (!node) return;
 
     std::string indent(indentLevel * 2, ' ');  // 2 spaces per level
-    std::cout << indent << "Processing node: " << node->GetName() 
-              << " (Children: " << node->GetChildCount() << ")" << std::endl;
-
+    
     // Get node attributes
     FbxNodeAttribute* attribute = node->GetNodeAttribute();
-    if (attribute) {
-        FbxNodeAttribute::EType attributeType = attribute->GetAttributeType();
-        std::cout << indent << "Node has attribute type: ";
-        switch (attributeType) {
-        case FbxNodeAttribute::eMesh: 
-            std::cout << "Mesh"; 
-            break;
-        case FbxNodeAttribute::eNull: 
-            std::cout << "Null"; 
-            break;
-        case FbxNodeAttribute::eMarker: 
-            std::cout << "Marker"; 
-            break;
-        default: 
-            std::cout << "Other(" << attributeType << ")";
-        }
-        std::cout << std::endl;
-    }
+   
 
     // If the node contains a mesh, process it
     FbxMesh* fbxMesh = node->GetMesh();
     if (fbxMesh) {
-        std::cout << indent << "Found mesh with " 
-                  << fbxMesh->GetPolygonCount() << " polygons and "
-                  << fbxMesh->GetControlPointsCount() << " vertices" << std::endl;
+       
         ProcessMesh(fbxMesh);
     }
 
@@ -116,8 +95,8 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
     
     // Get vertex positions
     FbxVector4* controlPoints = mesh->GetControlPoints();
-    int vertexCount = mesh->GetControlPointsCount();
-    std::cout << "Processing " << vertexCount << " control points" << std::endl;
+    
+  
     // Prepare temporary storage for processed vertices
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;

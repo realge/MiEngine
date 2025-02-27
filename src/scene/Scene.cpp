@@ -73,7 +73,12 @@ bool Scene::loadTexturedModelPBR(const std::string& modelFilename,
     }
     
     // Create material with multiple textures
-    Material material = createMaterialWithTextures(texturePaths);
+    Material material;
+    material.diffuseColor = glm::vec3(0.8f, 0.2f, 0.2f); // Bright red color
+    material.metallic = 0.0f; // Non-metallic
+    material.roughness = 0.5f; // Medium roughness
+    material.alpha = 1.0f; 
+    //Material material = createMaterialWithTextures(texturePaths);
     
     // Create meshes with the material
     createMeshesFromData(meshDataList, transform, material);
@@ -96,6 +101,7 @@ Material Scene::createMaterialWithTextures(const MaterialTexturePaths& texturePa
         auto texture = loadTexture(texturePaths.normal);
         if (texture) {
             material.setTexture(TextureType::Normal, texture);
+            
         }
     }
     
@@ -201,6 +207,7 @@ void Scene::update(float deltaTime) {
         // Example: rotate each mesh
         instance.transform.rotation.y += deltaTime * 0.5f; // Rotate around Y axis
     }
+    
 }
 
 void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
@@ -386,110 +393,6 @@ bool Scene::setupEnvironment(const std::string& hdriPath) {
 
 
 
-void Scene::createTestPBRScene() {
-    // Clear any existing objects
-    meshInstances.clear();
-    
-    // Setup default lighting
-    setupDefaultLighting();
-    
-    // Create a grid of spheres with different metallic/roughness values
-    // Row = roughness
-    // Column = metallic
-    
-    MaterialTexturePaths texturePaths;
-    // Leave textures empty to use scalar values
-    
-    // Create a grid of spheres, 5x5
-    for (int row = 0; row < 5; row++) {
-        float roughness = row / 4.0f;
-        
-        for (int col = 0; col < 5; col++) {
-            float metallic = col / 4.0f;
-            
-            Transform transform;
-            transform.position = glm::vec3(
-                (col - 2) * 1.5f,  // X position
-                (row - 2) * 1.5f,  // Y position
-                0.0f               // Z position
-            );
-            transform.scale = glm::vec3(0.75f); // Sphere size
-            
-            // Create material with varying metallic/roughness values
-            Material material = createPBRMaterial(
-                "",             // No albedo texture
-                "",             // No normal texture
-                "",             // No metallic texture
-                "",             // No roughness texture
-                "",             // No ao texture
-                "",             // No emissive texture
-                metallic,       // Metallic value
-                roughness,      // Roughness value
-                glm::vec3(0.95f, 0.95f, 0.95f),  // Neutral base color
-                0.0f            // No emission
-            );
-            
-            // Load sphere model with this material
-            // Note: You'll need a sphere model in your assets
-            std::vector<MeshData> sphereMeshData;
-            if (modelLoader.LoadModel("models/sphere.fbx")) {
-                sphereMeshData = modelLoader.GetMeshData();
-                createMeshesFromData(sphereMeshData, transform, material);
-            }
-        }
-    }
-    
-    // Add a larger sphere in the back to showcase environment reflections
-    Transform mirrorSphereTransform;
-    mirrorSphereTransform.position = glm::vec3(0.0f, 0.0f, -5.0f);
-    mirrorSphereTransform.scale = glm::vec3(2.5f);
-    
-    Material mirrorMaterial = createPBRMaterial(
-        "",             // No albedo texture
-        "",             // No normal texture
-        "",             // No metallic texture
-        "",             // No roughness texture
-        "",             // No ao texture
-        "",             // No emissive texture
-        1.0f,           // Fully metallic
-        0.1f,           // Very smooth
-        glm::vec3(0.95f, 0.95f, 0.95f),  // Neutral base color
-        0.0f            // No emission
-    );
-    
-    std::vector<MeshData> mirrorSphereMeshData;
-    if (modelLoader.LoadModel("models/sphere.fbx")) {
-        mirrorSphereMeshData = modelLoader.GetMeshData();
-        createMeshesFromData(mirrorSphereMeshData, mirrorSphereTransform, mirrorMaterial);
-    }
-    
-    // Add a floor
-    Transform floorTransform;
-    floorTransform.position = glm::vec3(0.0f, -4.0f, 0.0f);
-    floorTransform.scale = glm::vec3(10.0f, 0.1f, 10.0f);
-    
-    Material floorMaterial = createPBRMaterial(
-        "textures/floor_albedo.jpg",
-        "textures/floor_normal.jpg",
-        "",
-        "textures/floor_roughness.jpg",
-        "textures/floor_ao.jpg",
-        "",
-        0.0f,           // Non-metallic
-        1.0f,           // Default roughness (will be overridden by texture)
-        glm::vec3(0.9f, 0.9f, 0.9f),  // Base color
-        0.0f            // No emission
-    );
-    
-    std::vector<MeshData> floorMeshData;
-    if (modelLoader.LoadModel("models/plane.fbx")) {
-        floorMeshData = modelLoader.GetMeshData();
-        createMeshesFromData(floorMeshData, floorTransform, floorMaterial);
-    }
-    
-    // Set up environment mapping
-    setupEnvironment("textures/environment.hdr");
-}
 
 const std::vector<MeshInstance>& Scene::getMeshInstances() const {
     return meshInstances;

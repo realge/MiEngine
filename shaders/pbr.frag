@@ -1,4 +1,3 @@
-// pbr_frag.glsl - PBR Fragment Shader
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
@@ -54,12 +53,18 @@ layout(binding = 0, set = 1) uniform samplerCube irradianceMap;
 layout(binding = 1, set = 1) uniform samplerCube prefilterMap;
 layout(binding = 2, set = 1) uniform sampler2D brdfLUT;
 
+// Render settings
+layout(push_constant) uniform PushConstants {
+    int useIBL;      // 0 = no IBL, 1 = use IBL
+    int debugView;   // 0 = normal, 1 = albedo, 2 = normal, 3 = metallic, 4 = roughness, 5 = ao
+} settings;
+
 // Input from vertex shader
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragPos;
-layout(location = 4) in mat3 TBN;
+layout(location = 4) in mat3 TBN; not being used
 layout(location = 7) in vec3 fragCameraPos;
 
 // Output
@@ -154,6 +159,24 @@ void main() {
         emissive = texture(emissiveMap, fragTexCoord).rgb * material.emissiveStrength;
     }
     
+    // Debug view modes
+    if (settings.debugView == 1) {
+        outColor = vec4(albedo.rgb, 1.0);
+        return;
+    } else if (settings.debugView == 2) {
+        outColor = vec4(N * 0.5 + 0.5, 1.0);
+        return;
+    } else if (settings.debugView == 3) {
+        outColor = vec4(vec3(metallic), 1.0);
+        return;
+    } else if (settings.debugView == 4) {
+        outColor = vec4(vec3(roughness), 1.0);
+        return;
+    } else if (settings.debugView == 5) {
+        outColor = vec4(vec3(ao), 1.0);
+        return;
+    }
+    
     // Calculate basic vectors needed for lighting
     vec3 V = normalize(fragCameraPos - fragPos);
     vec3 R = reflect(-V, N);
@@ -225,8 +248,8 @@ void main() {
     // IBL (Image-Based Lighting)
     vec3 ambient = vec3(0.0);
     
-    // Check for IBL textures using preprocessing
-    #ifdef USE_IBL
+    // Check for IBL setting at runtime
+    if (settings.useIBL > 0) {
         // Calculate IBL diffuse contribution
         vec3 kS = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
         vec3 kD = (1.0 - kS) * (1.0 - metallic);
@@ -241,16 +264,21 @@ void main() {
         
         // Combine ambient components
         ambient = (kD * diffuse + specular) * ao;
-    #else
+    } else {
         // Fallback to simple ambient lighting when IBL is not available
         ambient = lightData.ambientColor.rgb * albedo.rgb * ao;
-    #endif
+    }
     
     // Combine direct and indirect lighting
     vec3 color = Lo + ambient + emissive;
     
-    // Tone mapping: basic Reinhard
-    color = color / (color + vec3(1.0));
+    // Tone mapping: ACES filmic (better than Reinhard)
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
     
     // Gamma correction (assuming sRGB output)
     color = pow(color, vec3(1.0 / 2.2));

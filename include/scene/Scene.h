@@ -99,7 +99,7 @@ public:
     const glm::vec3& baseColor = glm::vec3(1.0f),
     float emissiveStrength = 1.0f);
     bool setupEnvironment(const std::string& hdriPath);
-    void createTestPBRScene();
+  
     const std::vector<MeshInstance>& getMeshInstances() const;
 
 private:
