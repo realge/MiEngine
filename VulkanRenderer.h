@@ -66,6 +66,20 @@ class VulkanRenderer
     const bool enableValidationLayers = true;
 #endif
 
+private:
+    // Get texture image info with fallback to default textures
+    VkDescriptorImageInfo getTextureImageInfo(const std::shared_ptr<Texture>& texture, 
+                                             std::shared_ptr<Texture> defaultTexture);
+
+public:
+    // Create a descriptor set for a specific material
+    VkDescriptorSet createMaterialDescriptorSet(const Material& material);
+    
+    // Update texture information in an existing descriptor set
+    void updateDescriptorSetTextures(VkDescriptorSet descriptorSet, const Material& material);
+    
+    // Bind a descriptor set (without updating it)
+    void bindDescriptorSet(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet);
     
     //==================================================================== debugging
     const std::vector<const char*> validationLayers = {

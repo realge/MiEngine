@@ -18,7 +18,14 @@ enum class TextureType {
 };
 
 struct Material {
+private:
+    // Descriptor set for this material
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    
+public:
     // Base properties
+    void setDescriptorSet(VkDescriptorSet set) { descriptorSet = set; }
+    VkDescriptorSet getDescriptorSet() const { return descriptorSet; }
     glm::vec3 diffuseColor = glm::vec3(1.0f);
     float alpha = 1.0f;
     
