@@ -143,6 +143,7 @@ public:
     void updateAllTextureDescriptors(const Material& material);
 
 private:
+    std::vector<VkFence> imagesInFlight;
 
     // IBL-related resources
     VkDescriptorSetLayout iblDescriptorSetLayout;

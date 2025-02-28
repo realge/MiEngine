@@ -210,7 +210,7 @@ void Scene::update(float deltaTime) {
     
 }
 
-void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
+void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj, uint32_t frameIndex) {
     for (const auto& instance : meshInstances) {
         // Get the model matrix for this instance
         glm::mat4 model = instance.transform.getModelMatrix();
@@ -222,7 +222,7 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
         if (instance.mesh->getMaterial().useTexture && 
             instance.mesh->getMaterial().diffuseTexture) {
             renderer->updateTextureDescriptor(instance.mesh->getMaterial().getTextureImageInfo());
-        }
+            }
         
         // Draw the mesh
         instance.mesh->bind(commandBuffer);

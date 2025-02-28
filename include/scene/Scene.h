@@ -78,7 +78,7 @@ public:
     void update(float deltaTime);
     
     // Record draw commands for all meshes
-    void draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj);
+    void draw(::VkCommandBuffer_T* commandBuffer, const glm::mat4& view, const glm::mat4& proj, uint32_t frameIndex);
 
 
     bool loadPBRModel(

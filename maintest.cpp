@@ -16,7 +16,7 @@ int main() {
     #else
         std::cout << "Running in DEBUG mode - validation enabled\n";
     #endif
-    
+  
     VulkanRenderer app;
     try {
         app.run();

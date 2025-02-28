@@ -107,6 +107,7 @@ void VulkanRenderer::initVulkan() {
     pickPhysicalDevice();
     createLogicalDevice();
     createSwapChain();
+    imagesInFlight.resize(swapChainImages.size(), VK_NULL_HANDLE);
     createImageViews();
     createRenderPass();
     createDescriptorSetLayout();
@@ -568,79 +569,38 @@ void VulkanRenderer::createCommandPool() {
 
 
 void VulkanRenderer::createCommandBuffers() {
+    // Resize the command buffer vector based on swap chain images
     commandBuffers.resize(swapChainFramebuffers.size());
     
+    // Create the command buffer allocation info
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = commandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
+    allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
     
+    // Allocate the command buffers
     if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate command buffers!");
     }
-
-    for (size_t i = 0; i < commandBuffers.size(); i++) {
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-        
-        if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
-
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = swapChainFramebuffers[i];
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = swapChainExtent;
-
-        // Clear color and depth values
-        std::array<VkClearValue, 2> clearValues{};
-        clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Black background
-        clearValues[1].depthStencil = {1.0f, 0}; // Far depth
-
-        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-        renderPassInfo.pClearValues = clearValues.data();
-
-        vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        // Bind the graphics pipeline
-        vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-
-        // Bind descriptor set for current frame
-        vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipelineLayout, 0, 1, &descriptorSets[i % MAX_FRAMES_IN_FLIGHT], 0, nullptr);
-
-        // Calculate view and projection matrices
-        glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, cameraUp);
-        glm::mat4 proj = glm::perspective(glm::radians(fov),
-            swapChainExtent.width / (float)swapChainExtent.height,
-            nearPlane, farPlane);
-
-        // Draw all meshes in the scene
-        if (scene) {
-            scene->draw(commandBuffers[i], view, proj);
-        }
-
-        vkCmdEndRenderPass(commandBuffers[i]);
-
-        if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
-            throw std::runtime_error("failed to record command buffer!");
-        }
-    }
+    
+    // Don't record any commands here!
+    // All command recording will happen in drawFrame() for each frame
 }
 
 void VulkanRenderer::createSyncObjects() {
     imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+    imagesInFlight.resize(swapChainImages.size(), VK_NULL_HANDLE);
+    
     VkSemaphoreCreateInfo semInfo{};
     semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(device, &semInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
@@ -671,7 +631,7 @@ void VulkanRenderer::mainLoop() {
 void VulkanRenderer::drawFrame() {
     // Wait for the previous frame to complete
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-
+    
     // Acquire the next image from the swap chain
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX,
@@ -695,6 +655,13 @@ void VulkanRenderer::drawFrame() {
     if (scene) {
         scene->update(deltaTime);
     }
+
+    // Check if a previous frame is using this image (i.e., there is its fence to wait on)
+    if (imagesInFlight.size() > 0 && imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+        vkWaitForFences(device, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+    }
+    // Mark the image as now being in use by this frame
+    imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
     // Reset the fence only if we are submitting work
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
@@ -734,29 +701,43 @@ void VulkanRenderer::drawFrame() {
         swapChainExtent.width / (float)swapChainExtent.height,
         nearPlane, farPlane);
     
+    // Important: Update uniform buffers for the CURRENT frame index
+    // This ensures we're updating the uniform buffer that's properly synchronized
+    updateMVPMatrices(glm::mat4(1.0f), view, proj);
+    
     // Choose rendering path based on render mode
     if (renderMode == RenderMode::PBR || renderMode == RenderMode::PBR_IBL) {
         // Update lights for PBR
         updateLights();
         
         // Use PBR rendering pipeline
-        drawWithPBR(commandBuffers[imageIndex], view, proj);
+        vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
+        
+        // Important: Bind the descriptor set for the CURRENT frame
+        vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pbrPipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+        
+        // Draw scene with PBR pipeline
+        if (scene) {
+            scene->draw(commandBuffers[imageIndex], view, proj, currentFrame);
+        }
         
         // If IBL is enabled and IBL descriptor sets are available, bind them
         if (renderMode == RenderMode::PBR_IBL && iblDescriptorSet != VK_NULL_HANDLE) {
-            drawWithIBL(commandBuffers[imageIndex]);
+            vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pbrPipelineLayout, 1, 1, &iblDescriptorSet, 0, nullptr);
         }
     } else {
         // Use standard pipeline
         vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         
-        // Bind descriptor set
+        // Important: Bind the descriptor set for the CURRENT frame
         vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
         
         // Draw scene with standard pipeline
         if (scene) {
-            scene->draw(commandBuffers[imageIndex], view, proj);
+            scene->draw(commandBuffers[imageIndex], view, proj, currentFrame);
         }
     }
 
@@ -980,15 +961,14 @@ void VulkanRenderer::createDescriptorSets() {
         descriptorWrites[0].descriptorCount = 1;
         descriptorWrites[0].pBufferInfo = &mvpBufferInfo;
 
-        // Material UBO binding
         descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[1].dstSet = descriptorSets[i];
         descriptorWrites[1].dstBinding = 1;
         descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pBufferInfo = &materialBufferInfo;
+        descriptorWrites[1].pImageInfo = &albedoInfo; // Use image info, not buffer info
+        descriptorWrites[1].pBufferInfo = nullptr; 
 
         // Base color texture binding
         descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1108,6 +1088,8 @@ void VulkanRenderer::recreateSwapChain() {
 
     // Recreate swap chain and dependent resources
     createSwapChain();
+    // Resize imagesInFlight for the new swap chain
+    imagesInFlight.resize(swapChainImages.size(), VK_NULL_HANDLE);
     createImageViews();
     createRenderPass();
     createGraphicsPipeline();
@@ -1119,6 +1101,9 @@ void VulkanRenderer::recreateSwapChain() {
         createPBRPipeline();
     }
     createCommandBuffers();
+    for (size_t i = 0; i < swapChainImages.size(); i++) {
+        imagesInFlight[i] = VK_NULL_HANDLE;
+    }
 }
 
 VkImageView VulkanRenderer::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
@@ -1846,9 +1831,6 @@ void VulkanRenderer::createPBRPipeline() {
 
 
 void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
-    // Update lighting data
-    updateLights();
-    
     // Bind the appropriate pipeline
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
     
@@ -1884,11 +1866,10 @@ void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4&
         // Copy UBO data to the mapped uniform buffer
         memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
         
-        // Update material properties
+        // Update material properties - IMPORTANT: This updates descriptor sets
+        // These updates should ideally be done before command buffer recording begins
         const Material& material = instance.mesh->getMaterial();
         updateMaterialProperties(material);
-        
-        // Update texture descriptors
         updateAllTextureDescriptors(material);
         
         // Bind primary descriptor set (materials, textures, etc.)
@@ -1903,7 +1884,7 @@ void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4&
         );
         
         // If using IBL, bind the IBL descriptor set
-        if (renderMode == RenderMode::PBR_IBL) {
+        if (renderMode == RenderMode::PBR_IBL && iblDescriptorSet != VK_NULL_HANDLE) {
             vkCmdBindDescriptorSets(
                 commandBuffer,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1965,8 +1946,8 @@ void VulkanRenderer::cleanup() {
         vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
         
         // Cleanup light uniform buffers
-        vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
-        vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
+        //vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
+        //vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
         
         // Cleanup MVP uniform buffers
         vkDestroyBuffer(device, uniformBuffers[i], nullptr);
