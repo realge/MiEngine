@@ -80,7 +80,8 @@ public:
     
     // Bind a descriptor set (without updating it)
     void bindDescriptorSet(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet);
-    
+    VkPipelineLayout getPipelineLayout();
+
     //==================================================================== debugging
     const std::vector<const char*> validationLayers = {
         "VK_LAYER_KHRONOS_validation"
@@ -155,6 +156,9 @@ public:
     void createMaterialUniformBuffers();
     void updateMaterialProperties(const Material& material);
     void updateAllTextureDescriptors(const Material& material);
+    const std::vector<VkDescriptorSet>& getDescriptorSets() const {
+        return descriptorSets;
+    }
 
 private:
     std::vector<VkFence> imagesInFlight;
@@ -224,7 +228,8 @@ private:
     VkDescriptorPool descriptorPool;
     VkDescriptorSetLayout descriptorSetLayout;
     std::vector<VkDescriptorSet> descriptorSets;
-
+    VkDescriptorSetLayout MVPdescriptorSetLayout;
+    VkDescriptorSetLayout materialDescriptorSetLayout;
     std::vector<MeshData> meshes;
 
     std::unique_ptr<Scene> scene;
@@ -265,7 +270,7 @@ private:
         std::vector<VkFence> inFlightFences;
         size_t currentFrame = 0;
         const int MAX_FRAMES_IN_FLIGHT = 2;
-
+    
   
     
    

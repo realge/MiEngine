@@ -159,6 +159,11 @@ void VulkanRenderer::initVulkan() {
     modelTransform.scale = glm::vec3(1.0f);
 
 
+    Transform modelTransform2;
+    modelTransform2.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
+    modelTransform2.scale = glm::vec3(19.0f);
+
     MaterialTexturePaths texturePaths;
     texturePaths.diffuse = "texture/blackrat_color.png";  // Albedo/color texture
     texturePaths.normal = "texture/blackrat_normal.png";  // Normal map if available
@@ -169,7 +174,7 @@ void VulkanRenderer::initVulkan() {
     //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
     //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
     // scene->loadModel("models/test_model.fbx", modelTransform);
-   // scene->loadTexturedModel("models/test_model.fbx", "textures/test_texture.png", modelTransform);
+    scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform2);
     //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
 
     //scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, modelTransform);
@@ -192,7 +197,8 @@ void VulkanRenderer::initVulkan() {
     fov = 90.0f;
     nearPlane = 0.1f;
     farPlane = 10.0f;
-    
+  
+ 
     
 }
 void VulkanRenderer::createInstance() {
@@ -689,6 +695,14 @@ void VulkanRenderer::drawFrame() {
     // Reset the fence only if we are submitting work
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
+    for (const auto& instance : scene->getMeshInstances()) {
+        const auto& material = instance.mesh->getMaterial();
+        if (material->useTexture && material->diffuseTexture) {
+            
+            updateTextureDescriptor(material->getTextureImageInfo());
+        }
+    }
+    
     // Reset and begin command buffer
     vkResetCommandBuffer(commandBuffers[imageIndex], 0);
     
@@ -754,9 +768,6 @@ void VulkanRenderer::drawFrame() {
         // Use standard pipeline
         vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         
-        // Important: Bind the descriptor set for the CURRENT frame
-        vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
         
         // Draw scene with standard pipeline
         if (scene) {
@@ -898,21 +909,37 @@ void VulkanRenderer::createUniformBuffers() {
 }
 
 void VulkanRenderer::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    std::array<VkDescriptorPoolSize, 7> poolSizes{};
     
     // Uniform buffer pool size
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     
-    // Texture sampler pool size
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    // Texture sampler pool sizes for each texture type
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Diffuse texture
     poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Normal map
+    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    poolSizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Metallic-roughness
+    poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    poolSizes[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Occlusion
+    poolSizes[4].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    poolSizes[5].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Emissive
+    poolSizes[5].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
+    poolSizes[6].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // Extra/IBL
+    poolSizes[6].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT+2);//TODO: harded coded the amount of descriptor we can have
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
@@ -1337,6 +1364,7 @@ void VulkanRenderer::updateAllTextureDescriptors(const Material& material) {
         imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Diffuse);
     } else {
         imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imageInfos[writeCount].imageView = defaultAlbedoTexture->getImageView();
         imageInfos[writeCount].sampler = defaultAlbedoTexture->getSampler();
     }
@@ -1592,6 +1620,73 @@ void VulkanRenderer::createIBLDescriptorSetLayout() {
     }
     
     std::cout << "Created IBL descriptor set layout" << std::endl;
+}
+
+
+VkDescriptorSet VulkanRenderer::createMaterialDescriptorSet(const Material& material) {
+    // Allocate a new descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &descriptorSetLayout;
+    
+    VkDescriptorSet descriptorSet;
+    
+    if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate material descriptor set!");
+    }
+    
+    // Update the descriptor set with material textures
+    std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
+    std::array<VkDescriptorImageInfo, 6> imageInfos{};
+    int writeCount = 0;
+    
+    // MVP UBO binding - this will be the same for all materials
+    VkDescriptorBufferInfo mvpBufferInfo{};
+    mvpBufferInfo.buffer = uniformBuffers[0]; // Use first frame's UBO
+    mvpBufferInfo.offset = 0;
+    mvpBufferInfo.range = sizeof(UniformBufferObject);
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSet;
+    descriptorWrites[writeCount].dstBinding = 0;
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pBufferInfo = &mvpBufferInfo;
+    writeCount++;
+    
+    // Base color/albedo texture
+    if (material.hasTexture(TextureType::Diffuse)) {
+        imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Diffuse);
+    } else {
+        imageInfos[writeCount].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[writeCount].imageView = defaultAlbedoTexture->getImageView();
+        imageInfos[writeCount].sampler = defaultAlbedoTexture->getSampler();
+    }
+    
+    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[writeCount].dstSet = descriptorSet;
+    descriptorWrites[writeCount].dstBinding = 1;  // Diffuse texture binding
+    descriptorWrites[writeCount].dstArrayElement = 0;
+    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[writeCount].descriptorCount = 1;
+    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
+    writeCount++;
+    
+    // TODO: Add similar code for other texture types (normal, metallic, roughness, etc.)
+    // ...
+    
+    // Update the descriptor set
+    vkUpdateDescriptorSets(device, writeCount, descriptorWrites.data(), 0, nullptr);
+    
+    return descriptorSet;
+}
+
+VkPipelineLayout VulkanRenderer::getPipelineLayout()
+{
+    return pipelineLayout;
 }
 
 void VulkanRenderer::createIBLDescriptorSets() {
@@ -1891,9 +1986,9 @@ void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4&
         
         // Update material properties - IMPORTANT: This updates descriptor sets
         // These updates should ideally be done before command buffer recording begins
-        const Material& material = instance.mesh->getMaterial();
-        updateMaterialProperties(material);
-        updateAllTextureDescriptors(material);
+       //const Material& material = instance.mesh->getMaterial();
+        //updateMaterialProperties(material);
+        //updateAllTextureDescriptors(material);
         
         // Bind primary descriptor set (materials, textures, etc.)
         vkCmdBindDescriptorSets(
@@ -1943,155 +2038,6 @@ void VulkanRenderer::drawWithIBL(VkCommandBuffer commandBuffer) {
     // Rest of your drawing code...
 }
 
-
-
-VkDescriptorSet VulkanRenderer::createMaterialDescriptorSet(const Material& material) {
-    // Allocate a new descriptor set
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &descriptorSetLayout;
-
-    VkDescriptorSet descriptorSet;
-    if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate material descriptor set!");
-    }
-
-    // Update the descriptor set with texture information
-    updateDescriptorSetTextures(descriptorSet, material);
-
-    return descriptorSet;
-}
-
-VkDescriptorImageInfo VulkanRenderer::getTextureImageInfo(
-    const std::shared_ptr<Texture>& texture, 
-    std::shared_ptr<Texture> defaultTexture) 
-{
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    
-    if (texture) {
-        imageInfo.imageView = texture->getImageView();
-        imageInfo.sampler = texture->getSampler();
-    } else if (defaultTexture) {
-        imageInfo.imageView = defaultTexture->getImageView();
-        imageInfo.sampler = defaultTexture->getSampler();
-    }
-    
-    return imageInfo;
-}
-
-void VulkanRenderer::updateDescriptorSetTextures(VkDescriptorSet descriptorSet, const Material& material) {
-    std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
-    std::array<VkDescriptorImageInfo, 5> imageInfos{};
-    int writeCount = 0;
-    
-    // Base color/albedo texture
-    imageInfos[writeCount] = material.hasTexture(TextureType::Diffuse) 
-        ? material.getTextureImageInfo(TextureType::Diffuse)
-        : getTextureImageInfo(nullptr, defaultAlbedoTexture);
-    
-    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[writeCount].dstSet = descriptorSet;  // Use the provided descriptor set
-    descriptorWrites[writeCount].dstBinding = 2;  // Albedo binding
-    descriptorWrites[writeCount].dstArrayElement = 0;
-    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[writeCount].descriptorCount = 1;
-    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
-    writeCount++;
-    
-    // Normal map texture
-    imageInfos[writeCount] = material.hasTexture(TextureType::Normal)
-        ? material.getTextureImageInfo(TextureType::Normal)
-        : getTextureImageInfo(nullptr, defaultNormalTexture);
-    
-    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[writeCount].dstSet = descriptorSet;
-    descriptorWrites[writeCount].dstBinding = 3;  // Normal binding
-    descriptorWrites[writeCount].dstArrayElement = 0;
-    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[writeCount].descriptorCount = 1;
-    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
-    writeCount++;
-    
-    // Metallic-roughness map
-    if (material.hasTexture(TextureType::Metallic) || material.hasTexture(TextureType::Roughness)) {
-        if (material.hasTexture(TextureType::Metallic)) {
-            imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Metallic);
-        } else {
-            imageInfos[writeCount] = material.getTextureImageInfo(TextureType::Roughness);
-        }
-    } else {
-        imageInfos[writeCount] = getTextureImageInfo(nullptr, defaultMetallicRoughnessTexture);
-    }
-    
-    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[writeCount].dstSet = descriptorSet;
-    descriptorWrites[writeCount].dstBinding = 4;  // Metallic-roughness binding
-    descriptorWrites[writeCount].dstArrayElement = 0;
-    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[writeCount].descriptorCount = 1;
-    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
-    writeCount++;
-    
-    // Occlusion map
-    imageInfos[writeCount] = material.hasTexture(TextureType::AmbientOcclusion)
-        ? material.getTextureImageInfo(TextureType::AmbientOcclusion)
-        : getTextureImageInfo(nullptr, defaultOcclusionTexture);
-    
-    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[writeCount].dstSet = descriptorSet;
-    descriptorWrites[writeCount].dstBinding = 5;  // Occlusion binding
-    descriptorWrites[writeCount].dstArrayElement = 0;
-    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[writeCount].descriptorCount = 1;
-    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
-    writeCount++;
-    
-    // Emissive map
-    imageInfos[writeCount] = material.hasTexture(TextureType::Emissive)
-        ? material.getTextureImageInfo(TextureType::Emissive)
-        : getTextureImageInfo(nullptr, defaultEmissiveTexture);
-    
-    descriptorWrites[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[writeCount].dstSet = descriptorSet;
-    descriptorWrites[writeCount].dstBinding = 6;  // Emissive binding
-    descriptorWrites[writeCount].dstArrayElement = 0;
-    descriptorWrites[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[writeCount].descriptorCount = 1;
-    descriptorWrites[writeCount].pImageInfo = &imageInfos[writeCount];
-    writeCount++;
-    
-    // Update all descriptors at once
-    vkUpdateDescriptorSets(device, writeCount, descriptorWrites.data(), 0, nullptr);
-}
-
-void VulkanRenderer::bindDescriptorSet(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet) {
-    // Bind the main descriptor set with MVP matrices
-    vkCmdBindDescriptorSets(
-        commandBuffer,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipelineLayout,  // Use standard or PBR pipeline layout as needed
-        0,               // First set index
-        1,               // Number of descriptor sets
-        &descriptorSets[currentFrame],  // Main descriptor set with UBOs
-        0, nullptr
-    );
-    
-    // Bind the material-specific descriptor set with textures
-    vkCmdBindDescriptorSets(
-        commandBuffer,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipelineLayout,  // Use standard or PBR pipeline layout as needed
-        1,               // Second set index
-        1,               // Number of descriptor sets
-        &descriptorSet,  // Material descriptor set
-        0, nullptr
-    );
-}
-
-
 // Clean up IBL resources
 void VulkanRenderer::cleanupIBL() {
     environmentMap.reset();
@@ -2101,8 +2047,6 @@ void VulkanRenderer::cleanupIBL() {
     
     vkDestroyDescriptorSetLayout(device, iblDescriptorSetLayout, nullptr);
 }
-
-
 
 void VulkanRenderer::cleanup() {
     // Wait for the device to finish operations before cleaning up
@@ -2333,9 +2277,7 @@ void VulkanRenderer::createPBRTestGrid() {
             // Load sphere with this material
             scene->loadModel("models/sphere.fbx", transform);
             auto& instances = scene->getMeshInstances();
-            if (!instances.empty()) {
-                instances.back().mesh->setMaterial(material);
-            }
+           
         }
     }
     

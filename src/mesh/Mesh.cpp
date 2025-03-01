@@ -3,12 +3,13 @@
 #include <stdexcept>
 #include <cstring>
 
-Mesh::Mesh(VkDevice device, VkPhysicalDevice physicalDevice, const MeshData& meshData, const Material& material)
+Mesh::Mesh(VkDevice device, VkPhysicalDevice physicalDevice, const MeshData& meshData, 
+           const std::shared_ptr<Material>& material)
     : device(device), physicalDevice(physicalDevice),
       vertexBuffer(VK_NULL_HANDLE), vertexBufferMemory(VK_NULL_HANDLE),
       indexBuffer(VK_NULL_HANDLE), indexBufferMemory(VK_NULL_HANDLE),
       vertices(meshData.vertices), indices(meshData.indices),
-      material(material)
+      material(material)  // Now accepts and stores the shared_ptr
 {
     indexCount = static_cast<uint32_t>(indices.size());
 }

@@ -59,7 +59,8 @@ public:
 
     // Load a model and add all its meshes to the scene
     bool loadModel(const std::string& filename, const Transform& transform = Transform());
-    
+    void createMeshesFromData(const std::vector<MeshData>& meshDataList, const Transform& transform);
+
     // Load a model with a single texture
     bool loadTexturedModel(const std::string& modelFilename, const std::string& textureFilename, 
                            const Transform& transform = Transform());
@@ -103,7 +104,7 @@ public:
     const std::vector<MeshInstance>& getMeshInstances() const;
 
 private:
-    VulkanRenderer* renderer;
+    VulkanRenderer* renderer;// TODO: not sure if this is save
     std::vector<MeshInstance> meshInstances;
     
     // Storage for loaded textures to prevent duplicates
@@ -112,8 +113,9 @@ private:
     ModelLoader modelLoader;
 
     // Helper to create mesh objects from loaded mesh data
-    void createMeshesFromData(const std::vector<MeshData>& meshDataList, const Transform& transform, 
-                             const Material& material = Material());
+    void createMeshesFromData(const std::vector<MeshData>& meshDataList, 
+                          const Transform& transform,
+                          const std::shared_ptr<Material>& material);;
     
     // Load or retrieve a cached texture
     std::shared_ptr<Texture> loadTexture(const std::string& filename);

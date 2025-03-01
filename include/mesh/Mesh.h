@@ -8,8 +8,8 @@ class Mesh {
 public:
     // Construct a Mesh from loaded mesh data
     Mesh(VkDevice device, VkPhysicalDevice physicalDevice, 
-      const MeshData& meshData, 
-      const Material& material = Material());
+         const MeshData& meshData, 
+         const std::shared_ptr<Material>& material = std::make_shared<Material>());
     ~Mesh();
 
     // Create GPU buffers for vertices and indices using provided command pool and graphics queue
@@ -21,16 +21,17 @@ public:
     // Issue draw command for this mesh
     void draw(VkCommandBuffer commandBuffer) const;
 
-    // Get mesh material
-    const Material& getMaterial() const { return material; }
-    
-    // Set mesh material
-    void setMaterial(const Material& newMaterial) { material = newMaterial; }
+    // Then update the getter and setter:
+    // Get mesh material (returns a reference to the shared_ptr)
+    const std::shared_ptr<Material>& getMaterial() const { return material; }
 
+    // Set mesh material (takes a shared_ptr to a material)
+    void setMaterial(const std::shared_ptr<Material>& newMaterial) { material = newMaterial; }
+    
 private:
     VkDevice device;
     VkPhysicalDevice physicalDevice;
-    Material material;
+    std::shared_ptr<Material> material;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;

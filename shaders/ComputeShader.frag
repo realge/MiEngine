@@ -97,7 +97,7 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
     
     // Basic ambient approximation (would be replaced by IBL)
-    float ambientStrength = 0.7;
+    float ambientStrength = 0.2;
     vec3 ambient = ambientStrength * albedo.rgb;
     
     // Combine lighting components

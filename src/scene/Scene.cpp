@@ -28,6 +28,15 @@ bool Scene::loadModel(const std::string& filename, const Transform& transform) {
     return true;
 }
 
+void Scene::createMeshesFromData(const std::vector<MeshData>& meshDataList, 
+                                 const Transform& transform) {//overloaded
+    // Create a default material
+    auto defaultMaterial = std::make_shared<Material>();
+    
+    // Call the full version of the method
+    createMeshesFromData(meshDataList, transform, defaultMaterial);
+}
+
 bool Scene::loadTexturedModel(const std::string& modelFilename, const std::string& textureFilename, 
                              const Transform& transform) {
     if (!modelLoader.LoadModel(modelFilename)) {
@@ -51,10 +60,12 @@ bool Scene::loadTexturedModel(const std::string& modelFilename, const std::strin
     }
     
     // Create material with texture
-    Material material(texture);
-    
+    auto myMaterial = std::make_shared<Material>();
+    myMaterial->setTexture(TextureType::Diffuse, texture);
     // Create meshes with the material
-    createMeshesFromData(meshDataList, transform, material);
+    VkDescriptorSet materialDescriptorSet = renderer->createMaterialDescriptorSet(*myMaterial);
+    myMaterial->setDescriptorSet(materialDescriptorSet);
+    createMeshesFromData(meshDataList, transform, myMaterial);
     return true;
 }
 
@@ -73,11 +84,11 @@ bool Scene::loadTexturedModelPBR(const std::string& modelFilename,
     }
     
     // Create material with multiple textures
-    Material material;
-    material.diffuseColor = glm::vec3(0.8f, 0.2f, 0.2f); // Bright red color
-    material.metallic = 0.0f; // Non-metallic
-    material.roughness = 0.5f; // Medium roughness
-    material.alpha = 1.0f; 
+    auto material = std::make_shared<Material>();
+    material->diffuseColor = glm::vec3(0.8f, 0.2f, 0.2f); // Bright red color
+    material->metallic = 0.0f; // Non-metallic
+    material->roughness = 0.5f; // Medium roughness
+    material->alpha = 1.0f; 
     //Material material = createMaterialWithTextures(texturePaths);
     
     // Create meshes with the material
@@ -185,9 +196,9 @@ std::shared_ptr<Texture> Scene::loadTexture(const std::string& filename) {
 }
 
 void Scene::createMeshesFromData(const std::vector<MeshData>& meshDataList, const Transform& transform,
-                               const Material& material) {
+                               const std::shared_ptr<Material>& material) {
     for (const auto& meshData : meshDataList) {
-        // Create a new mesh with the provided material
+        // Create a new mesh with the provided material (shared pointer)
         auto mesh = std::make_shared<Mesh>(renderer->getDevice(), renderer->getPhysicalDevice(), 
                                         meshData, material);
         mesh->createBuffers(renderer->getCommandPool(), renderer->getGraphicsQueue());
@@ -218,11 +229,20 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
         // Update uniform buffer with MVP matrices
         renderer->updateMVPMatrices(model, view, proj);
         
-        // Update descriptor set with mesh's texture (if any)
-        if (instance.mesh->getMaterial().useTexture && 
-            instance.mesh->getMaterial().diffuseTexture) {
-            renderer->updateTextureDescriptor(instance.mesh->getMaterial().getTextureImageInfo());
-            }
+       
+        VkDescriptorSet materialDescriptorSet = instance.mesh->getMaterial()->getDescriptorSet();
+        if (materialDescriptorSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(
+                commandBuffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                renderer->getPipelineLayout(),  
+                0,  // First set index
+                1,  // Number of descriptor sets
+                &materialDescriptorSet,
+                0,
+                nullptr
+            );
+        }
         
         // Draw the mesh
         instance.mesh->bind(commandBuffer);
