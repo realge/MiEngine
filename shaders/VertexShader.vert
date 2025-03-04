@@ -4,13 +4,20 @@
 //------------------------------------------------------------------------------
 // Uniforms
 //------------------------------------------------------------------------------
-layout(binding = 0) uniform UniformBufferObject {
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;           // Model matrix
     mat4 view;            // View matrix
     mat4 proj;            // Projection matrix
     vec3 cameraPos;       // Camera position in world space
     float time;           // Time for animations (if needed)
 } ubo;
+
+// Push constant for model matrix - per-instance data
+layout(push_constant) uniform PushConstants {
+    mat4 model;           // Model matrix from push constant
+} pushConstants;
+
+
 
 //------------------------------------------------------------------------------
 // Input Vertex Attributes

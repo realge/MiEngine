@@ -32,6 +32,10 @@ struct QueueFamilyIndices {
     bool isComplete() { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
 
+struct ModelPushConstant {
+    glm::mat4 model;
+};
+
 enum class RenderMode {
     Standard,
     PBR,
@@ -72,6 +76,9 @@ private:
                                              std::shared_ptr<Texture> defaultTexture);
 
 public:
+
+   
+    void updateViewProjection(const glm::mat4& view, const glm::mat4& proj);
     // Create a descriptor set for a specific material
     VkDescriptorSet createMaterialDescriptorSet(const Material& material);
     
@@ -112,13 +119,9 @@ public:
 public: //texture related
     // Update texture descriptor
     void updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo);
-    void testPBRRendering();
-    void createPBRTestGrid();
-    
+  
     // Get the current descriptor set
-    VkDescriptorSet getCurrentDescriptorSet() const { 
-        return descriptorSets[currentFrame]; 
-    }
+    
 public: //light related
     struct LightData {
         alignas(16) glm::vec4 position;   // w=1 for point, w=0 for directional
@@ -144,21 +147,13 @@ public: //light related
 
     void createLightUniformBuffers();
     void updateLights();
-    void setupIBL(const std::string& hdriPath);
-    void createIBLDescriptorSetLayout();
-    void createPBRPipeline();
-    void createIBLDescriptorSets();
-    void drawWithIBL(VkCommandBuffer commandBuffer);
-    void cleanupIBL();
-
+   
 public:
     void createDefaultTextures();
     void createMaterialUniformBuffers();
     void updateMaterialProperties(const Material& material);
     void updateAllTextureDescriptors(const Material& material);
-    const std::vector<VkDescriptorSet>& getDescriptorSets() const {
-        return descriptorSets;
-    }
+  
 
 private:
     std::vector<VkFence> imagesInFlight;
@@ -216,6 +211,9 @@ public:
     void recreateSwapChain();
     void cleanupSwapChain();
 
+public:
+    std::vector<VkDescriptorSet> mvpDescriptorSets;
+    
 private:
    //TODO::need to refactor the code later
     std::vector<VkBuffer> uniformBuffers;
@@ -226,10 +224,11 @@ private:
 
     // Descriptor members
     VkDescriptorPool descriptorPool;
-    VkDescriptorSetLayout descriptorSetLayout;
-    std::vector<VkDescriptorSet> descriptorSets;
-    VkDescriptorSetLayout MVPdescriptorSetLayout;
+    VkDescriptorSetLayout mvpDescriptorSetLayout;
+
     VkDescriptorSetLayout materialDescriptorSetLayout;
+     std::vector<VkDescriptorSet>  materialDescriptorSets;
+ 
     std::vector<MeshData> meshes;
 
     std::unique_ptr<Scene> scene;
@@ -300,7 +299,8 @@ private:
         void initWindow();
         void mainLoop();
         void drawFrame();
-        void createDescriptorSetLayout();
+    void createDescriptorSetLayouts();
+   
        
         void createUniformBuffers();
         void createDescriptorPool();

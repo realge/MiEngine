@@ -12,8 +12,9 @@ layout(location = 3) in vec3 fragPosition;  // Added
 layout(location = 4) in mat3 TBN;           // Added (uses locations 4, 5, 6)
 layout(location = 7) in vec3 fragViewDir; 
 
+
 // Texture samplers - using your existing binding points
-layout(binding = 1) uniform sampler2D texSampler; // Diffuse/Albedo
+layout(set = 1, binding = 0) uniform sampler2D texSampler; // Diffuse/Albedo
 
 // Output color
 layout(location = 0) out vec4 outColor;
@@ -97,6 +98,7 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
     
     // Basic ambient approximation (would be replaced by IBL)
+    
     float ambientStrength = 0.2;
     vec3 ambient = ambientStrength * albedo.rgb;
     

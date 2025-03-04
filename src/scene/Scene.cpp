@@ -222,21 +222,53 @@ void Scene::update(float deltaTime) {
 }
 
 void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj, uint32_t frameIndex) {
+
+
+    vkCmdBindDescriptorSets(
+    commandBuffer,
+    VK_PIPELINE_BIND_POINT_GRAPHICS,
+    renderer->getPipelineLayout(),
+    0,  // Set index 0
+    1,  // One descriptor set
+    &renderer->mvpDescriptorSets[frameIndex],
+    0, nullptr
+);
+    renderer->updateViewProjection( view, proj);
     for (const auto& instance : meshInstances) {
         // Get the model matrix for this instance
         glm::mat4 model = instance.transform.getModelMatrix();
-        
+
+        //model = glm::scale(glm::mat4(1.0f), glm::vec3(19.0f));
         // Update uniform buffer with MVP matrices
-        renderer->updateMVPMatrices(model, view, proj);
-        
+       
+    
+        std::cout << "Model matrix:" << std::endl;
+        for (int i = 0; i < 4; i++) {
+            std::cout << "  ";
+            for (int j = 0; j < 4; j++) {
+                std::cout << model[j][i] << "\t"; // Note: glm matrices are column-major
+            }
+            std::cout << std::endl;
+        }
+       
+        // Push the model matrix as a push constant
+        ModelPushConstant pushConstant = { model };
+        vkCmdPushConstants(
+            commandBuffer,
+            renderer->getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(ModelPushConstant),
+            &pushConstant
+        );
        
         VkDescriptorSet materialDescriptorSet = instance.mesh->getMaterial()->getDescriptorSet();
         if (materialDescriptorSet != VK_NULL_HANDLE) {
             vkCmdBindDescriptorSets(
                 commandBuffer,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                renderer->getPipelineLayout(),  
-                0,  // First set index
+                renderer->getPipelineLayout(),  // You'll need to add a getter for this
+                1,  // First set index
                 1,  // Number of descriptor sets
                 &materialDescriptorSet,
                 0,
@@ -403,7 +435,7 @@ bool Scene::setupEnvironment(const std::string& hdriPath) {
     
     // Set up IBL with the given HDRI environment map
     try {
-        renderer->setupIBL(hdriPath);
+        //renderer->setupIBL(hdriPath);
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Failed to set up environment: " << e.what() << std::endl;
