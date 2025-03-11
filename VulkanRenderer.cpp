@@ -122,9 +122,17 @@ void VulkanRenderer::initVulkan() {
     std::cout << "Render pass created" << std::endl;
     createDescriptorSetLayouts();
     std::cout << "Descriptor set layouts created" << std::endl;
+    createLightDescriptorSetLayout();
+    std::cout << "Light descriptor set layout created" << std::endl;
+ 
+    createLightUniformBuffers();
+    std::cout << "Light uniform buffers created" << std::endl;
+    // Create light descriptor sets
+   
+    
     createGraphicsPipeline();
     std::cout << "Graphics pipeline created" << std::endl;
-    //createPBRPipeline();
+    
     createDepthResources();
     std::cout << "Depth resources created" << std::endl;
     createFramebuffers();
@@ -145,10 +153,16 @@ void VulkanRenderer::initVulkan() {
     std::cout << "Descriptor pool created" << std::endl;
     createDescriptorSets();
     std::cout << "Descriptor sets created" << std::endl;
+
+    createLightDescriptorSets();
+    std::cout << "Light descriptor sets created" << std::endl;
     createCommandBuffers();
     std::cout << "Command buffers created" << std::endl;
     createSyncObjects();
     std::cout << "Sync objects created" << std::endl;
+
+    createPBRPipeline();
+    std::cout << "PBR pipeline created" << std::endl;
     // Initialize scene
     scene = std::make_unique<Scene>(this);
 
@@ -169,12 +183,12 @@ void VulkanRenderer::initVulkan() {
     texturePaths.normal = "texture/blackrat_normal.png";  // Normal map if available
     MaterialTexturePaths texturePaths1;
     //scene->loadModel("models/blackrat.fbx", modelTransform);
-    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
+    //scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/test_model.fbx", "texture/blackrat_color.png", modelTransform);
     //scene->loadTexturedModel("models/animal.fbx", "", modelTransform);
     //scene->loadTexturedModel("models/eyeball.fbx", "", modelTransform2);
     // scene->loadModel("models/test_model.fbx", modelTransform);
-    scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform2);
+    //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform2);
     //scene->loadTexturedModel("models/house.fbx", "texture/house.png", modelTransform);
 
     //scene->loadTexturedModelPBR("models/blackrat.fbx", texturePaths, modelTransform);
@@ -197,7 +211,7 @@ void VulkanRenderer::initVulkan() {
     fov = 90.0f;
     nearPlane = 0.1f;
     farPlane = 10.0f;
-  
+   createPBRTestScene();
    
     
 }
@@ -433,6 +447,159 @@ void VulkanRenderer::createRenderPass() {
     }
 }
 
+void VulkanRenderer::createPBRPipeline() {
+    // Load SPIR-V shader binaries
+    auto vertCode = readFile("shaders/pbr.vert.spv");
+    auto fragCode = readFile("shaders/pbr.frag.spv");
+
+    VkShaderModule vertModule = createShaderModule(vertCode);
+    VkShaderModule fragModule = createShaderModule(fragCode);
+
+    VkPipelineShaderStageCreateInfo vertStage{};
+    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStage.module = vertModule;
+    vertStage.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragStage{};
+    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragStage.module = fragModule;
+    fragStage.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
+
+    // Vertex input state - use the same as in createGraphicsPipeline
+    auto bindingDesc = Vertex::getBindingDescription();
+    auto attrDescs = Vertex::getAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attrDescs.data();
+
+    // Input assembly
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    // Viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.f;
+    viewport.y = 0.f;
+    viewport.width = (float)swapChainExtent.width;
+    viewport.height = (float)swapChainExtent.height;
+    viewport.minDepth = 0.f;
+    viewport.maxDepth = 1.f;
+
+    VkRect2D scissor{};
+    scissor.offset = { 0, 0 };
+    scissor.extent = swapChainExtent;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    // Rasterizer
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; // Enable backface culling for better performance
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+
+    // Multisampling
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth and stencil testing
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
+    // Color blending
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    // Create pipeline layout with descriptor set layouts
+    std::array<VkDescriptorSetLayout, 3> descriptorSetLayouts = {
+        mvpDescriptorSetLayout,
+        materialDescriptorSetLayout,
+        lightDescriptorSetLayout
+    };
+
+    // Add push constant for material properties
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(ModelPushConstant) + sizeof(MaterialPushConstant);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pbrPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create PBR pipeline layout!");
+    }
+
+    // Create the graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = pbrPipelineLayout;
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pbrPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create PBR graphics pipeline!");
+    }
+
+    // Clean up shader modules
+    vkDestroyShaderModule(device, fragModule, nullptr);
+    vkDestroyShaderModule(device, vertModule, nullptr);
+}
 
 void VulkanRenderer::createGraphicsPipeline() {
 
@@ -572,6 +739,87 @@ void VulkanRenderer::createGraphicsPipeline() {
     vkDestroyShaderModule(device, vertModule, nullptr);
 }
 
+void VulkanRenderer::createLightDescriptorSetLayout() {
+    // Create binding for light uniform buffer
+    VkDescriptorSetLayoutBinding lightBinding{};
+    lightBinding.binding = 0;
+    lightBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    lightBinding.descriptorCount = 1;
+    lightBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // Used in fragment shader
+    lightBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &lightBinding;
+
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &lightDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create light descriptor set layout!");
+    }
+}
+
+void VulkanRenderer::createLightUniformBuffers() {
+    VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
+
+    lightUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    lightUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    lightUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        createBuffer(
+            bufferSize,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            lightUniformBuffers[i],
+            lightUniformBuffersMemory[i]
+        );
+
+        vkMapMemory(device, lightUniformBuffersMemory[i], 0, bufferSize, 0, &lightUniformBuffersMapped[i]);
+        
+        // Initialize with default values
+        LightUniformBuffer lightData{};
+        lightData.lightCount = 0;
+        lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
+        
+        memcpy(lightUniformBuffersMapped[i], &lightData, sizeof(lightData));
+    }
+}
+
+void VulkanRenderer::createLightDescriptorSets() {
+    // Allocate descriptor sets
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, lightDescriptorSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.pSetLayouts = layouts.data();
+
+    lightDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(device, &allocInfo, lightDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate light descriptor sets!");
+    }
+
+    // Update descriptor sets
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = lightUniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(LightUniformBuffer);
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = lightDescriptorSets[i];
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+    }
+}
+
+
 void VulkanRenderer::createFramebuffers() {
     swapChainFramebuffers.resize(swapChainImageViews.size());
 
@@ -668,6 +916,164 @@ void VulkanRenderer::mainLoop() {
     }
     vkDeviceWaitIdle(device);
 }
+
+void VulkanRenderer::createPBRTestScene() {
+    // Make sure scene is initialized
+    if (!scene) {
+        scene = std::make_unique<Scene>(this);
+    }
+    
+    // Clear any existing scene
+    scene->clearMeshInstances();
+    scene->clearLights();
+    
+    // Set up default lighting
+    scene->setupDefaultLighting();
+    
+    // Create a grid of spheres with different material properties
+    
+    // Create sphere mesh data
+    MeshData sphereData = modelLoader.CreateSphere(1.0f, 32, 32);
+    
+    // Define the grid dimensions
+    const int GRID_SIZE = 5;
+    const float SPACING = 2.5f;
+    const float START_X = -((GRID_SIZE-1) * SPACING) / 2.0f;
+    const float START_Z = -((GRID_SIZE-1) * SPACING) / 2.0f;
+    
+    // Create materials with varying metallic/roughness values
+    for (int x = 0; x < GRID_SIZE; x++) {
+        for (int z = 0; z < GRID_SIZE; z++) {
+            // Calculate position
+            float posX = START_X + x * SPACING;
+            float posZ = START_Z + z * SPACING;
+            
+            // Calculate material properties
+            float metallic = static_cast<float>(x) / static_cast<float>(GRID_SIZE - 1);
+            float roughness = static_cast<float>(z) / static_cast<float>(GRID_SIZE - 1);
+            roughness = glm::max(0.05f, roughness); // Avoid perfectly smooth surfaces
+            
+            // Create transform
+            Transform transform;
+            transform.position = glm::vec3(posX, 1.0f, posZ);
+            transform.scale = glm::vec3(1.0f);
+            
+            // Create material
+            auto material = std::make_shared<Material>();
+            material->diffuseColor = glm::vec3(0.8f, 0.8f, 0.8f); // White/light gray
+            material->setPBRProperties(metallic, roughness);
+            
+            // Create a texture for this material
+            auto metallicRoughnessTexture = TextureUtils::createDefaultMetallicRoughnessMap(
+                device,
+                physicalDevice,
+                commandPool,
+                graphicsQueue,
+                metallic,
+                roughness
+            );
+            
+            material->setTexture(TextureType::MetallicRoughness, metallicRoughnessTexture);
+            
+            // Create descriptor set for this material
+            VkDescriptorSet materialDescriptorSet = createMaterialDescriptorSet(*material);
+            material->setDescriptorSet(materialDescriptorSet);
+            
+            // Create a mesh with this material
+            auto mesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, material);
+            mesh->createBuffers(commandPool, graphicsQueue);
+            
+            // Add to scene
+            scene->addMeshInstance(mesh, transform);
+        }
+    }
+    
+    // Create a floor plane
+    MeshData planeData = modelLoader.CreatePlane(20.0f, 20.0f);
+    
+    // Create floor transform
+    Transform floorTransform;
+    floorTransform.position = glm::vec3(0.0f, -1.0f, 0.0f);
+    floorTransform.rotation = glm::vec3(0.0f);
+    floorTransform.scale = glm::vec3(1.0f);
+    
+    // Create floor material
+    auto floorMaterial = std::make_shared<Material>();
+    floorMaterial->diffuseColor = glm::vec3(0.1f, 0.1f, 0.1f); // Dark gray
+    floorMaterial->setPBRProperties(0.0f, 0.9f); // Non-metallic, rough
+    
+    // Create descriptor set for floor material
+    VkDescriptorSet floorDescriptorSet = createMaterialDescriptorSet(*floorMaterial);
+    floorMaterial->setDescriptorSet(floorDescriptorSet);
+    
+    // Create floor mesh
+    auto floorMesh = std::make_shared<Mesh>(device, physicalDevice, planeData, floorMaterial);
+    floorMesh->createBuffers(commandPool, graphicsQueue);
+    
+    // Add floor to scene
+    scene->addMeshInstance(floorMesh, floorTransform);
+    
+    // Add a few more colored spheres with different materials
+    
+    // Gold sphere
+    Transform goldTransform;
+    goldTransform.position = glm::vec3(-6.0f, 1.0f, -3.0f);
+    goldTransform.scale = glm::vec3(1.5f);
+    
+    auto goldMaterial = std::make_shared<Material>();
+    goldMaterial->diffuseColor = glm::vec3(1.0f, 0.765f, 0.336f); // Gold color
+    goldMaterial->setPBRProperties(1.0f, 0.1f); // Metallic, smooth
+    
+    VkDescriptorSet goldDescriptorSet = createMaterialDescriptorSet(*goldMaterial);
+    goldMaterial->setDescriptorSet(goldDescriptorSet);
+    
+    auto goldMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, goldMaterial);
+    goldMesh->createBuffers(commandPool, graphicsQueue);
+    scene->addMeshInstance(goldMesh, goldTransform);
+    
+    // Ruby sphere
+    Transform rubyTransform;
+    rubyTransform.position = glm::vec3(6.0f, 1.0f, -3.0f);
+    rubyTransform.scale = glm::vec3(1.5f);
+    
+    auto rubyMaterial = std::make_shared<Material>();
+    rubyMaterial->diffuseColor = glm::vec3(0.9f, 0.1f, 0.1f); // Ruby red
+    rubyMaterial->setPBRProperties(0.0f, 0.1f); // Dielectric, smooth
+    
+    VkDescriptorSet rubyDescriptorSet = createMaterialDescriptorSet(*rubyMaterial);
+    rubyMaterial->setDescriptorSet(rubyDescriptorSet);
+    
+    auto rubyMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, rubyMaterial);
+    rubyMesh->createBuffers(commandPool, graphicsQueue);
+    scene->addMeshInstance(rubyMesh, rubyTransform);
+    
+    // Jade sphere
+    Transform jadeTransform;
+    jadeTransform.position = glm::vec3(0.0f, 1.0f, -7.0f);
+    jadeTransform.scale = glm::vec3(1.5f);
+    
+    auto jadeMaterial = std::make_shared<Material>();
+    jadeMaterial->diffuseColor = glm::vec3(0.135f, 0.8f, 0.435f); // Jade green
+    jadeMaterial->setPBRProperties(0.0f, 0.3f); // Dielectric, medium roughness
+    
+    VkDescriptorSet jadeDescriptorSet = createMaterialDescriptorSet(*jadeMaterial);
+    jadeMaterial->setDescriptorSet(jadeDescriptorSet);
+    
+    auto jadeMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, jadeMaterial);
+    jadeMesh->createBuffers(commandPool, graphicsQueue);
+    scene->addMeshInstance(jadeMesh, jadeTransform);
+    
+    // Position the camera to view the scene
+    cameraPos = glm::vec3(8.0f, 7.0f, 8.0f);
+    cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+    cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    
+    // Enable PBR rendering
+    renderMode = RenderMode::PBR;
+    
+    std::cout << "PBR test scene created" << std::endl;
+}
+
 void VulkanRenderer::drawFrame() {
     // Wait for the previous frame to complete
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
@@ -692,26 +1098,22 @@ void VulkanRenderer::drawFrame() {
         (currentTime - lastFrameTime).count();
     lastFrameTime = currentTime;
    
-    
+
 
     // Update scene
     if (scene) {
         scene->update(deltaTime);
     }
 
-    // Check if a previous frame is using this image (i.e., there is its fence to wait on)
+    // Check if a previous frame is using this image
     if (imagesInFlight.size() > 0 && imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
         vkWaitForFences(device, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
     }
     // Mark the image as now being in use by this frame
     imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
-    
-    // Reset the fence only if we are submitting work
+    // Reset the fence for this frame
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
-
-
-    
     
     // Reset and begin command buffer
     vkResetCommandBuffer(commandBuffers[imageIndex], 0);
@@ -719,7 +1121,7 @@ void VulkanRenderer::drawFrame() {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = 0;
-    vkDeviceWaitIdle(device);
+    
     if (vkBeginCommandBuffer(commandBuffers[imageIndex], &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
@@ -733,7 +1135,7 @@ void VulkanRenderer::drawFrame() {
     renderPassInfo.renderArea.extent = swapChainExtent;
 
     std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};  // Clear to black
     clearValues[1].depthStencil = {1.0f, 0};
 
     renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
@@ -748,44 +1150,51 @@ void VulkanRenderer::drawFrame() {
         swapChainExtent.width / (float)swapChainExtent.height,
         nearPlane, farPlane);
     
-    // Important: Update uniform buffers for the CURRENT frame index
-    // This ensures we're updating the uniform buffer that's properly synchronized
-    //updateMVPMatrices(glm::mat4(1.0f), view, proj);
-   
-
-
+    // Update the view and projection matrices
+    updateViewProjection(view, proj);
     
-    // Choose rendering path based on render mode
+    // Update lights for PBR
     if (renderMode == RenderMode::PBR || renderMode == RenderMode::PBR_IBL) {
-        // Update lights for PBR
         updateLights();
         
-        // Use PBR rendering pipeline
+        // DEBUG: Print light info
+        LightUniformBuffer* lightData = (LightUniformBuffer*)lightUniformBuffersMapped[currentFrame];
+        std::cout << "Light count: " << lightData->lightCount << std::endl;
+        for (int i = 0; i < lightData->lightCount; i++) {
+            std::cout << "Light " << i 
+                    << " - Type: " << (lightData->lights[i].position.w < 0.5 ? "Directional" : "Point")
+                    << ", Intensity: " << lightData->lights[i].color.a 
+                    << ", Position/Dir: " << lightData->lights[i].position.x << ","
+                    << lightData->lights[i].position.y << ","
+                    << lightData->lights[i].position.z << std::endl;
+        }
+        
+        // Bind the PBR pipeline
         vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
         
-        // Important: Bind the descriptor set for the CURRENT frame
-        vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pbrPipelineLayout, 0, 1, &mvpDescriptorSets[currentFrame], 0, nullptr);
+        // Set dynamic viewport and scissor
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(swapChainExtent.width);
+        viewport.height = static_cast<float>(swapChainExtent.height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(commandBuffers[imageIndex], 0, 1, &viewport);
         
-        // Draw scene with PBR pipeline
-        if (scene) {
-            scene->draw(commandBuffers[imageIndex], view, proj, currentFrame);
-        }
-        
-        // If IBL is enabled and IBL descriptor sets are available, bind them
-        if (renderMode == RenderMode::PBR_IBL && iblDescriptorSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pbrPipelineLayout, 1, 1, &iblDescriptorSet, 0, nullptr);
-        }
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = swapChainExtent;
+        vkCmdSetScissor(commandBuffers[imageIndex], 0, 1, &scissor);
     } else {
         // Use standard pipeline
         vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-        
-        
-        // Draw scene with standard pipeline
-        if (scene) {
-            scene->draw(commandBuffers[imageIndex], view, proj, currentFrame);
-        }
+    }
+    
+    // Use the scene's draw function which handles all rendering details
+    if (scene) {
+        scene->draw(commandBuffers[imageIndex], view, proj, currentFrame);
+        std::cout << "Mesh instances drawn: " << scene->getMeshInstances().size() << std::endl;
     }
 
     vkCmdEndRenderPass(commandBuffers[imageIndex]);
@@ -841,7 +1250,7 @@ void VulkanRenderer::createDescriptorSetLayouts() {
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     uboLayoutBinding.pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo mvpLayoutInfo{};
@@ -914,7 +1323,7 @@ void VulkanRenderer::createDescriptorPool() {
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT+4);//TODO: harded coded the amount of descriptor we can have
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT+99);//TODO: harded coded the amount of descriptor we can have
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
@@ -1296,31 +1705,31 @@ void VulkanRenderer::updateTextureDescriptor(const VkDescriptorImageInfo& imageI
     
     vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
 }
-void VulkanRenderer::createLightUniformBuffers() {
-    VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
 
-    lightUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    lightUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-    lightUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        createBuffer(
-            bufferSize,
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            lightUniformBuffers[i],
-            lightUniformBuffersMemory[i]
-        );
-
-        vkMapMemory(device, lightUniformBuffersMemory[i], 0, bufferSize, 0, &lightUniformBuffersMapped[i]);
-        
-        // Initialize with default values
-        LightUniformBuffer lightData{};
-        lightData.lightCount = 0;
-        lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
-        
-        memcpy(lightUniformBuffersMapped[i], &lightData, sizeof(lightData));
-    }
+MaterialPushConstant VulkanRenderer::createMaterialPushConstant(const Material& material) {
+    MaterialPushConstant pushConstant{};
+    
+    // Set base color (RGB) and alpha
+    pushConstant.baseColorFactor = glm::vec4(material.diffuseColor, material.alpha);
+    
+    // Set PBR properties
+    pushConstant.metallicFactor = material.metallic;
+    pushConstant.roughnessFactor = material.roughness;
+    pushConstant.ambientOcclusion = 1.0f; // Default to full AO if no texture
+    pushConstant.emissiveFactor = material.emissiveStrength;
+    
+    // Set texture flags
+    pushConstant.hasAlbedoMap = material.hasTexture(TextureType::Diffuse) ? 1 : 0;
+    pushConstant.hasNormalMap = material.hasTexture(TextureType::Normal) ? 1 : 0;
+    
+    // Handle metallic/roughness textures
+    pushConstant.hasMetallicRoughnessMap = material.hasTexture(TextureType::MetallicRoughness) ? 1 : 
+                                         (material.hasTexture(TextureType::Metallic) && 
+                                          material.hasTexture(TextureType::Roughness)) ? 1 : 0;
+    
+    pushConstant.hasEmissiveMap = material.hasTexture(TextureType::Emissive) ? 1 : 0;
+    
+    return pushConstant;
 }
 // Update updateLights method in VulkanRenderer.cpp
 void VulkanRenderer::updateLights() {
@@ -1330,29 +1739,49 @@ void VulkanRenderer::updateLights() {
     // Create and update the light uniform buffer
     LightUniformBuffer lightData{};
     
+    // Initialize with safe defaults
+    lightData.lightCount = 0;
+    lightData.ambientColor = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);  // Increase ambient for visibility
+    
+    // Debug output
+    std::cout << "Updating lights, count: " << lights.size() << std::endl;
+    
     // Set light count (clamped to MAX_LIGHTS)
     lightData.lightCount = static_cast<int>(std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS)));
-    
-    // Set ambient light
-    lightData.ambientColor = glm::vec4(0.03f, 0.03f, 0.03f, 1.0f);
-    
+
+   
+
+   
     // Set light data for each light
     for (int i = 0; i < lightData.lightCount; i++) {
         const auto& light = lights[i];
         
-        // Position (w=0 for directional, w=1 for point light)
-        lightData.lights[i].position = glm::vec4(light.position, light.isDirectional ? 0.0f : 1.0f);
+        // For directional lights, normalize the direction
+        if (light.isDirectional) {
+            glm::vec3 normalizedDir = glm::normalize(light.position);
+            lightData.lights[i].position = glm::vec4(normalizedDir, 0.0f);
+        } else {
+            lightData.lights[i].position = glm::vec4(light.position, 1.0f);
+        }
         
-        // Color and intensity
         lightData.lights[i].color = glm::vec4(light.color, light.intensity);
-        
-        // Range and falloff
         lightData.lights[i].radius = light.radius;
         lightData.lights[i].falloff = light.falloff;
+        
+        std::cout << "Light " << i << ": " 
+                 << (light.isDirectional ? "Directional" : "Point") 
+                 << ", Position/Dir: " << lightData.lights[i].position.x << ","
+                 << lightData.lights[i].position.y << ","
+                 << lightData.lights[i].position.z 
+                 << ", Intensity: " << light.intensity << std::endl;
     }
     
     // Update the light uniform buffer
     memcpy(lightUniformBuffersMapped[currentFrame], &lightData, sizeof(lightData));
+
+    // Verify light count after copy
+    LightUniformBuffer* verifyData = (LightUniformBuffer*)lightUniformBuffersMapped[currentFrame];
+    std::cout << "After copy, light count is: " << verifyData->lightCount << std::endl;
 }
 
 
@@ -1371,7 +1800,7 @@ VkDescriptorSet VulkanRenderer::createMaterialDescriptorSet(const Material& mate
     VkDescriptorSet descriptorSet;
     
     if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate material descriptor set!");
+        throw std::runtime_error("Failed to allocate material descriptor set in createMaterialDescriptorSet!");
     }
     
     // Only update with texture (COMBINED_IMAGE_SAMPLER) for binding 0
@@ -1411,77 +1840,7 @@ VkPipelineLayout VulkanRenderer::getPipelineLayout()
 
 
 
-void VulkanRenderer::drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj) {
-    // Bind the appropriate pipeline
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
-    
-    // Set dynamic viewport and scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(swapChainExtent.width);
-    viewport.height = static_cast<float>(swapChainExtent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-    
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = swapChainExtent;
-    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    
-    // Render the scene
-    for (const auto& instance : scene->getMeshInstances()) {
-        // Calculate model matrix for this instance
-        glm::mat4 model = instance.transform.getModelMatrix();
-        
-        // Update MVP matrices and camera position
-        UniformBufferObject ubo{};
-        ubo.model = model;
-        ubo.view = view;
-        ubo.proj = proj;
-        ubo.proj[1][1] *= -1; // Flip Y for Vulkan
-        ubo.cameraPos = cameraPos;
-        ubo.time = static_cast<float>(glfwGetTime()); // Current time for animations
-        
-        // Copy UBO data to the mapped uniform buffer
-        memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
-        
-        // Update material properties - IMPORTANT: This updates descriptor sets
-        // These updates should ideally be done before command buffer recording begins
-       //const Material& material = instance.mesh->getMaterial();
-        //updateMaterialProperties(material);
-        //updateAllTextureDescriptors(material);
-        
-        // Bind primary descriptor set (materials, textures, etc.)
-        vkCmdBindDescriptorSets(
-            commandBuffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pbrPipelineLayout,
-            0, // First set index
-            1, // Number of descriptor sets
-            &mvpDescriptorSets[currentFrame],
-            0, nullptr
-        );
-        
-        // If using IBL, bind the IBL descriptor set
-        if (renderMode == RenderMode::PBR_IBL && iblDescriptorSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(
-                commandBuffer,
-                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pbrPipelineLayout,
-                1, // Second set index
-                1, // Number of descriptor sets
-                &iblDescriptorSet,
-                0, nullptr
-            );
-        }
-        
-        // Draw the mesh
-        instance.mesh->bind(commandBuffer);
-        instance.mesh->draw(commandBuffer);
-    }
-}
+
 
 
 // Update draw function to bind IBL descriptors
@@ -1506,8 +1865,9 @@ void VulkanRenderer::cleanup() {
         vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
         
         // Cleanup light uniform buffers
-        //vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
-        //vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
+   
+        vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
+        vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
         
         // Cleanup MVP uniform buffers
         vkDestroyBuffer(device, uniformBuffers[i], nullptr);
@@ -1531,6 +1891,7 @@ void VulkanRenderer::cleanup() {
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, materialDescriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, mvpDescriptorSetLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, lightDescriptorSetLayout, nullptr);
     // If IBL is used, also destroy its descriptor set layout
     if (iblDescriptorSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device, iblDescriptorSetLayout, nullptr);

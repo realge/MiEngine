@@ -36,11 +36,6 @@ struct ModelPushConstant {
     glm::mat4 model;
 };
 
-enum class RenderMode {
-    Standard,
-    PBR,
-    PBR_IBL
-};
 
 struct MaterialUniformBuffer {
     alignas(16) glm::vec4 baseColorFactor;    // RGB + alpha
@@ -64,6 +59,7 @@ struct MaterialUniformBuffer {
 
 class VulkanRenderer
 {
+    
 #ifdef NDEBUG
     const bool enableValidationLayers = false;
 #else
@@ -74,9 +70,14 @@ private:
     // Get texture image info with fallback to default textures
     VkDescriptorImageInfo getTextureImageInfo(const std::shared_ptr<Texture>& texture, 
                                              std::shared_ptr<Texture> defaultTexture);
+    void createPBRTestScene();
 
 public:
-
+    enum class RenderMode {
+        Standard,
+        PBR,
+        PBR_IBL
+    };
    
     void updateViewProjection(const glm::mat4& view, const glm::mat4& proj);
     // Create a descriptor set for a specific material
@@ -119,33 +120,37 @@ public:
 public: //texture related
     // Update texture descriptor
     void updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo);
-  
+    MaterialPushConstant createMaterialPushConstant(const Material& material);
+
     // Get the current descriptor set
     
 public: //light related
     struct LightData {
-        alignas(16) glm::vec4 position;   // w=1 for point, w=0 for directional
-        alignas(16) glm::vec4 color;      // rgb + intensity
+        alignas(16) glm::vec4 position;   // xyz = position/direction, w = 1 for point, 0 for directional
+        alignas(16) glm::vec4 color;      // rgb = color, a = intensity
         alignas(4) float radius;
         alignas(4) float falloff;
-        alignas(8) glm::vec2 padding;
+        alignas(8) float padding[2];      // Padding to ensure 16-byte alignment
     };
 
     #define MAX_LIGHTS 16
 
     struct LightUniformBuffer {
-        alignas(4) int lightCount;
-        alignas(4) int padding[3];
-        alignas(16) LightData lights[MAX_LIGHTS];
+        alignas(16) LightData lights[MAX_LIGHTS];  // Put lights first to match shader
         alignas(16) glm::vec4 ambientColor;
+        alignas(4) int lightCount;
+        alignas(4) int padding[3];        // Padding to ensure 16-byte alignment
     };
 
     // Add light buffer members
     std::vector<VkBuffer> lightUniformBuffers;
     std::vector<VkDeviceMemory> lightUniformBuffersMemory;
     std::vector<void*> lightUniformBuffersMapped;
+    VkDescriptorSetLayout lightDescriptorSetLayout = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> lightDescriptorSets;
 
     void createLightUniformBuffers();
+    void createLightDescriptorSets();
     void updateLights();
    
 public:
@@ -153,11 +158,18 @@ public:
     void createMaterialUniformBuffers();
     void updateMaterialProperties(const Material& material);
     void updateAllTextureDescriptors(const Material& material);
-  
+    ModelLoader modelLoader;
+    VkPipeline getGraphicsPipeline () const { return graphicsPipeline; } // getGraphicsPipeline()
+    VkPipeline getPBRPipeline() const { return pbrPipeline; }
+    VkPipelineLayout getPBRPipelineLayout() const { return pbrPipelineLayout; }
+    const std::vector<VkDescriptorSet>& getMVPDescriptorSets() const { return mvpDescriptorSets; }
+    const std::vector<VkDescriptorSet>& getLightDescriptorSets() const { return lightDescriptorSets; }
+    RenderMode getRenderMode() const { return renderMode; }
 
 private:
     std::vector<VkFence> imagesInFlight;
 
+ 
     // IBL-related resources
     VkDescriptorSetLayout iblDescriptorSetLayout;
     VkDescriptorSet iblDescriptorSet;
@@ -182,7 +194,7 @@ private:
     std::shared_ptr<Texture> prefilterMap;   // Prefiltered specular environment
     std::shared_ptr<Texture> brdfLUT;
 
-    void drawWithPBR(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj);
+    ;
 private:
     std::shared_ptr<Texture> defaultTexture;
     // Create a default white texture
@@ -289,8 +301,10 @@ private:
 
         void createImageViews();
         void createRenderPass();
-        void createGraphicsPipeline();
-        void createFramebuffers();
+    void createPBRPipeline();
+    void createGraphicsPipeline();
+    void createLightDescriptorSetLayout();
+    void createFramebuffers();
         void createCommandPool();
         
         void createCommandBuffers();

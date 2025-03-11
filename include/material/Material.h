@@ -5,111 +5,121 @@
 
 #include "../texture/Texture.h"
 
+#pragma once
+#include <vulkan/vulkan.h>
+#include <glm/glm.hpp>
+#include <memory>
+#include <vector>
+#include <string>
+#include <unordered_map>
 
+
+// Enum for texture types
 enum class TextureType {
-    Diffuse,      // Base color/albedo
-    Normal,       // Normal map
-    Metallic,     // Metallic map
-    Roughness,    // Roughness map
-    AmbientOcclusion, // Ambient occlusion map
-    Emissive,     // Emission map
-    Height,       // Height/displacement map
-    Specular      // Specular map (for non-PBR workflow)
+    Diffuse,            // Base color/albedo texture
+    Normal,             // Normal map
+    Metallic,           // Metallic map
+    Roughness,          // Roughness map
+    MetallicRoughness,  // Combined metallic-roughness map
+    AmbientOcclusion,   // Ambient occlusion map
+    Emissive,           // Emissive/glow map
+    Height,             // Height/displacement map
+    Specular,           // Specular map (for non-PBR workflows)
+    Count               // Helper to get the count of texture types
 };
 
-struct Material {
-private:
-    // Descriptor set for this material
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-    
+// Class representing material properties
+class Material {
 public:
-    // Base properties
-    void setDescriptorSet(VkDescriptorSet set) { descriptorSet = set; }
-    VkDescriptorSet getDescriptorSet() const { return descriptorSet; }
-    glm::vec3 diffuseColor = glm::vec3(1.0f);
-    float alpha = 1.0f;
+    Material() :
+        diffuseColor(1.0f),
+        emissiveColor(0.0f),
+        metallic(0.0f),
+        roughness(0.5f),
+        alpha(1.0f),
+        emissiveStrength(0.0f),
+        descriptorSet(VK_NULL_HANDLE) {}
     
-    // PBR properties
-    float metallic = 0.0f;
-    float roughness = 0.5f;
-    glm::vec3 emissiveColor = glm::vec3(0.0f);
-    float emissiveStrength = 1.0f;
+    // Base material properties
+    glm::vec3 diffuseColor;
+    glm::vec3 emissiveColor;
+    float metallic;
+    float roughness;
+    float alpha;
+    float emissiveStrength;
     
-    // Legacy texture references for backward compatibility
-    std::shared_ptr<Texture> diffuseTexture = nullptr;
-    std::shared_ptr<Texture> normalTexture = nullptr;
-    
-    // New texture storage using enum as key
-    std::unordered_map<TextureType, std::shared_ptr<Texture>> textures;
-    
-    // Settings
-    bool useTexture = false;
-    
-    // Constructor with default values
-    Material() = default;
-    
-    // Constructor with diffuse color
-    Material(const glm::vec3& color) : diffuseColor(color) {}
-    
-    // Constructor with texture
-    Material(std::shared_ptr<Texture> texture) 
-        : diffuseTexture(texture), useTexture(texture != nullptr) {
-        if (texture) {
-            textures[TextureType::Diffuse] = texture;
-        }
+    // Set PBR scalar properties
+    void setPBRProperties(float metallic, float roughness) {
+        this->metallic = metallic;
+        this->roughness = roughness;
     }
     
-    
-    // Add a texture of specific type
+    // Set a texture of a specific type
     void setTexture(TextureType type, std::shared_ptr<Texture> texture) {
-        textures[type] = texture;
-        
-        // Update legacy references for compatibility
-        if (type == TextureType::Diffuse) {
-            diffuseTexture = texture;
-            useTexture = texture != nullptr;
-        }
-        else if (type == TextureType::Normal) {
-            normalTexture = texture;
-        }
+        textures[static_cast<int>(type)] = texture;
     }
     
-    // Check if material has a specific texture type
+    // Check if a texture of a specific type exists
     bool hasTexture(TextureType type) const {
-        auto it = textures.find(type);
-        return it != textures.end() && it->second != nullptr;
+        int index = static_cast<int>(type);
+        return index < textures.size() && textures[index] != nullptr;
     }
     
-    // Get a texture of specific type
+    // Get a texture of a specific type
     std::shared_ptr<Texture> getTexture(TextureType type) const {
-        auto it = textures.find(type);
-        if (it != textures.end()) {
-            return it->second;
+        int index = static_cast<int>(type);
+        if (index < textures.size()) {
+            return textures[index];
         }
         return nullptr;
     }
     
-    // Get texture binding info for updating descriptor sets (for diffuse texture)
-    VkDescriptorImageInfo getTextureImageInfo() const {
-        VkDescriptorImageInfo imageInfo{};
-        if (diffuseTexture) {
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = diffuseTexture->getImageView();
-            imageInfo.sampler = diffuseTexture->getSampler();
-        }
-        return imageInfo;
-    }
-    
-    // Get texture binding info for a specific texture type
+    // Get image info for a texture of a specific type (for descriptor sets)
     VkDescriptorImageInfo getTextureImageInfo(TextureType type) const {
+        std::shared_ptr<Texture> texture = getTexture(type);
+        
         VkDescriptorImageInfo imageInfo{};
-        auto texture = getTexture(type);
         if (texture) {
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfo.imageView = texture->getImageView();
             imageInfo.sampler = texture->getSampler();
         }
+        
         return imageInfo;
+    }
+    
+    // Set all PBR textures at once
+    void setPBRTextures(
+        std::shared_ptr<Texture> albedo,
+        std::shared_ptr<Texture> normal,
+        std::shared_ptr<Texture> metallicRoughness,
+        std::shared_ptr<Texture> roughness,
+        std::shared_ptr<Texture> ao,
+        std::shared_ptr<Texture> emissive)
+    {
+        if (albedo) setTexture(TextureType::Diffuse, albedo);
+        if (normal) setTexture(TextureType::Normal, normal);
+        
+        // Handle separate or combined metallic/roughness
+        if (metallicRoughness) {
+            setTexture(TextureType::MetallicRoughness, metallicRoughness);
+        } else {
+            if (metallicRoughness) setTexture(TextureType::Metallic, getTexture(TextureType::Metallic));
+            if (roughness) setTexture(TextureType::Roughness, roughness);
+        }
+        
+        if (ao) setTexture(TextureType::AmbientOcclusion, ao);
+        if (emissive) setTexture(TextureType::Emissive, emissive);
+    }
+    
+    // Set the descriptor set for this material
+    void setDescriptorSet(VkDescriptorSet set) {
+        descriptorSet = set;
+    }
+    
+    // Get the descriptor set for this material
+    VkDescriptorSet getDescriptorSet() const {
+        return descriptorSet;
     }
 
     std::shared_ptr<Texture> createCombinedMetallicRoughnessTexture(VkDevice device, VkPhysicalDevice physicalDevice,
@@ -117,43 +127,25 @@ public:
                                                                     std::shared_ptr<Texture> metallicTex,
                                                                     std::shared_ptr<Texture> roughnessTex);
 
-
-    // PBR Utility setters
-    void setPBRProperties(float metallic, float roughness) {
-        this->metallic = metallic;
-        this->roughness = roughness;
-    }
-
-    void setPBRTextures(std::shared_ptr<Texture> albedo, 
-                        std::shared_ptr<Texture> normal = nullptr,
-                        std::shared_ptr<Texture> metallic = nullptr,
-                        std::shared_ptr<Texture> roughness = nullptr,
-                        std::shared_ptr<Texture> ao = nullptr,
-                        std::shared_ptr<Texture> emissive = nullptr) {
+private:
+    // Vector of textures indexed by TextureType
+    std::vector<std::shared_ptr<Texture>> textures = std::vector<std::shared_ptr<Texture>>(
+        static_cast<size_t>(TextureType::Count), nullptr);
     
-        if (albedo) {
-            setTexture(TextureType::Diffuse, albedo);
-        }
-        if (normal) {
-            setTexture(TextureType::Normal, normal);
-        }
-        if (metallic) {
-            setTexture(TextureType::Metallic, metallic);
-        }
-        if (roughness) {
-            setTexture(TextureType::Roughness, roughness);
-        }
-        if (ao) {
-            setTexture(TextureType::AmbientOcclusion, ao);
-        }
-        if (emissive) {
-            setTexture(TextureType::Emissive, emissive);
-        }
-    }
-
-    void setEmissive(const glm::vec3& color, float strength = 1.0f) {
-        emissiveColor = color;
-        emissiveStrength = strength;
-    }
-
+    // Descriptor set for this material
+    VkDescriptorSet descriptorSet;
 };
+
+// Material push constants (for fragment shader)
+struct MaterialPushConstant {
+    alignas(16) glm::vec4 baseColorFactor;
+    alignas(4) float metallicFactor;
+    alignas(4) float roughnessFactor;
+    alignas(4) float ambientOcclusion;
+    alignas(4) float emissiveFactor;
+    alignas(4) int hasAlbedoMap;
+    alignas(4) int hasNormalMap;
+    alignas(4) int hasMetallicRoughnessMap;
+    alignas(4) int hasEmissiveMap;
+};
+

@@ -222,48 +222,124 @@ void Scene::update(float deltaTime) {
 }
 
 void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm::mat4& proj, uint32_t frameIndex) {
-
-
-    vkCmdBindDescriptorSets(
-    commandBuffer,
-    VK_PIPELINE_BIND_POINT_GRAPHICS,
-    renderer->getPipelineLayout(),
-    0,  // Set index 0
-    1,  // One descriptor set
-    &renderer->mvpDescriptorSets[frameIndex],
-    0, nullptr
-);
-    renderer->updateViewProjection( view, proj);
+    // Common setup - update view/projection matrices
+    renderer->updateViewProjection(view, proj);
+    
+    // Check which pipeline to use
+    bool usePBR = renderer->getRenderMode() == VulkanRenderer::RenderMode::PBR || 
+                 renderer->getRenderMode() == VulkanRenderer::RenderMode::PBR_IBL;
+    
+    // Bind the appropriate pipeline
+    if (usePBR) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->getPBRPipeline());
+        
+        // Bind MVP descriptor set (set 0)
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            renderer->getPBRPipelineLayout(),
+            0,  // Set index 0
+            1,  // One descriptor set
+            &renderer->getMVPDescriptorSets()[frameIndex],
+            0, nullptr
+        );
+        
+        // Bind light descriptor set (set 2)
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            renderer->getPBRPipelineLayout(),
+            2,  // Set index 2
+            1,  // One descriptor set
+            &renderer->getLightDescriptorSets()[frameIndex],
+            0, nullptr
+        );
+    } else {
+        // Use standard pipeline
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->getGraphicsPipeline());
+        
+        // Bind MVP descriptor set
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            renderer->getPipelineLayout(),
+            0,  // Set index 0
+            1,  // One descriptor set
+            &renderer->getMVPDescriptorSets()[frameIndex],
+            0, nullptr
+        );
+    }
+    
+    // Draw each mesh instance
     for (const auto& instance : meshInstances) {
         // Get the model matrix for this instance
         glm::mat4 model = instance.transform.getModelMatrix();
-
-        //model = glm::scale(glm::mat4(1.0f), glm::vec3(19.0f));
-        // Update uniform buffer with MVP matrices
         
         // Push the model matrix as a push constant
-        ModelPushConstant pushConstant = { model };
-        vkCmdPushConstants(
-            commandBuffer,
-            renderer->getPipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            sizeof(ModelPushConstant),
-            &pushConstant
-        );
-       
-        VkDescriptorSet materialDescriptorSet = instance.mesh->getMaterial()->getDescriptorSet();
-        if (materialDescriptorSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(
+        ModelPushConstant modelPushConstant = { model };
+        
+        if (usePBR) {
+            // Push model matrix to the PBR pipeline
+            vkCmdPushConstants(
                 commandBuffer,
-                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                renderer->getPipelineLayout(),  // You'll need to add a getter for this
-                1,  // First set index
-                1,  // Number of descriptor sets
-                &materialDescriptorSet,
+                renderer->getPBRPipelineLayout(),
+                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
-                nullptr
+                sizeof(ModelPushConstant),
+                &modelPushConstant
             );
+            
+            // Get the material descriptor set (set 1)
+            VkDescriptorSet materialDescriptorSet = instance.mesh->getMaterial()->getDescriptorSet();
+            if (materialDescriptorSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(
+                    commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    renderer->getPBRPipelineLayout(),
+                    1,  // Set index 1
+                    1,  // One descriptor set
+                    &materialDescriptorSet,
+                    0, nullptr
+                );
+            }
+            
+            // Create and push material constants
+            MaterialPushConstant materialPushConstant = 
+                renderer->createMaterialPushConstant(*instance.mesh->getMaterial());
+
+            // Push material constants to the PBR pipeline
+            vkCmdPushConstants(
+                commandBuffer,
+                renderer->getPBRPipelineLayout(),
+                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                sizeof(ModelPushConstant), // Offset after model push constant
+                sizeof(MaterialPushConstant),
+                &materialPushConstant
+            );
+        } else {
+            // Use standard pipeline
+            vkCmdPushConstants(
+                commandBuffer,
+                renderer->getPipelineLayout(),
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(ModelPushConstant),
+                &modelPushConstant
+            );
+            
+            // Bind material descriptor set for standard pipeline
+            VkDescriptorSet materialDescriptorSet = instance.mesh->getMaterial()->getDescriptorSet();
+            if (materialDescriptorSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(
+                    commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    renderer->getPipelineLayout(),
+                    1,  // Set index 1
+                    1,  // One descriptor set
+                    &materialDescriptorSet,
+                    0, nullptr
+                );
+            }
         }
         
         // Draw the mesh
@@ -283,6 +359,12 @@ void Scene::addLight(const glm::vec3& position, const glm::vec3& color,
     
     lights.push_back(light);
 }
+
+
+void Scene::clearMeshInstances() {
+    meshInstances.clear();
+}
+
 
 void Scene::removeLight(size_t index) {
     if (index < lights.size()) {

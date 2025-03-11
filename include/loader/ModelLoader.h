@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <fbxsdk.h>
+
+
 #include <../include/Utils/CommonVertex.h>
 // A simple structure to hold vertex data (position only for now)
 
@@ -24,7 +26,9 @@ public:
 
     // Returns the loaded meshes
     const std::vector<MeshData>& GetMeshData() const { return meshes; }
-
+    MeshData CreateSphere(float radius, int slices, int stacks);
+    MeshData CreatePlane(float width, float height);
+    MeshData CreateCube(float size);
     /**
  * Calculate tangents for a mesh
  * Should be called after loading the mesh but before creating GPU buffers
@@ -37,6 +41,7 @@ private:
 
     // Extract mesh data from an FBX mesh node
     void ProcessMesh(FbxMesh* mesh);
+    
 
     // Storage for the meshes loaded from the FBX file
     std::vector<MeshData> meshes;

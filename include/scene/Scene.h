@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+#include "../include/material/Material.h"
 #include "../include/mesh/Mesh.h"
 #include "../include/loader/ModelLoader.h"
 #include "../include/texture/Texture.h"
@@ -142,7 +143,8 @@ public:
     void addLight(const glm::vec3& position, const glm::vec3& color, 
               float intensity = 1.0f, float radius = 10.0f, 
               float falloff = 1.0f, bool isDirectional = false);
-              
+    void clearMeshInstances();
+
     void removeLight(size_t index);
     void setupDefaultLighting();
     void clearLights();
