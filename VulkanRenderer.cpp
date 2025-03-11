@@ -162,7 +162,7 @@ void VulkanRenderer::initVulkan() {
     Transform modelTransform2;
     modelTransform2.position = glm::vec3(0.0f, 0.0f, 0.0f);
     //modelTransform.rotation = glm::vec3(0.0f, 0.0f, 90.0f);
-    modelTransform2.scale = glm::vec3(12.0f);
+    modelTransform2.scale = glm::vec3(1.0f);
 
     MaterialTexturePaths texturePaths;
     texturePaths.diffuse = "texture/blackrat_color.png";  // Albedo/color texture

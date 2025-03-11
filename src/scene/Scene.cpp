@@ -240,17 +240,7 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
 
         //model = glm::scale(glm::mat4(1.0f), glm::vec3(19.0f));
         // Update uniform buffer with MVP matrices
-       
-    
-        std::cout << "Model matrix:" << std::endl;
-        for (int i = 0; i < 4; i++) {
-            std::cout << "  ";
-            for (int j = 0; j < 4; j++) {
-                std::cout << model[j][i] << "\t"; // Note: glm matrices are column-major
-            }
-            std::cout << std::endl;
-        }
-       
+        
         // Push the model matrix as a push constant
         ModelPushConstant pushConstant = { model };
         vkCmdPushConstants(

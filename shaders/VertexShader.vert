@@ -43,7 +43,7 @@ void main() {
     // Position Transformation
     //--------------------------------------------------------------------------
     // Transform vertex to world space
-    vec4 worldPosition = ubo.model * vec4(inPosition, 1.0);
+    vec4 worldPosition = pushConstants.model * vec4(inPosition, 1.0);
     
     // Save world position for fragment shader
     fragPosition = worldPosition.xyz;
@@ -55,7 +55,7 @@ void main() {
     // Normal and Tangent Space Calculation
     //--------------------------------------------------------------------------
     // Calculate normal matrix (inverse transpose of model matrix's 3x3 part)
-    mat3 normalMatrix = transpose(inverse(mat3(ubo.model)));
+    mat3 normalMatrix = transpose(inverse(mat3(pushConstants.model)));
     
     // Transform normal and tangent to world space
     vec3 N = normalize(normalMatrix * inNormal);
