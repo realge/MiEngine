@@ -276,8 +276,11 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
         glm::mat4 model = instance.transform.getModelMatrix();
         
         // Push the model matrix as a push constant
-        ModelPushConstant modelPushConstant = { model };
-        
+     
+        PushConstant pushConstant = renderer->createPushConstant(
+                model, 
+                *instance.mesh->getMaterial()
+            );
         if (usePBR) {
             // Push model matrix to the PBR pipeline
             vkCmdPushConstants(
@@ -285,8 +288,8 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
                 renderer->getPBRPipelineLayout(),
                  VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
-                sizeof(ModelPushConstant),
-                &modelPushConstant
+                sizeof(PushConstant),
+                &pushConstant
             );
             
             // Get the material descriptor set (set 1)
@@ -303,19 +306,6 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
                 );
             }
             
-            // Create and push material constants
-            MaterialPushConstant materialPushConstant = 
-                renderer->createMaterialPushConstant(*instance.mesh->getMaterial());
-
-            // Push material constants to the PBR pipeline
-            vkCmdPushConstants(
-                commandBuffer,
-                renderer->getPBRPipelineLayout(),
-                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                sizeof(ModelPushConstant), // Offset after model push constant
-                sizeof(MaterialPushConstant),
-                &materialPushConstant
-            );
         } else {
             // Use standard pipeline
             vkCmdPushConstants(
@@ -323,8 +313,8 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
                 renderer->getPipelineLayout(),
                 VK_SHADER_STAGE_VERTEX_BIT,
                 0,
-                sizeof(ModelPushConstant),
-                &modelPushConstant
+                sizeof(PushConstant),
+                &pushConstant
             );
             
             // Bind material descriptor set for standard pipeline

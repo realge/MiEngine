@@ -1,5 +1,5 @@
 #include "VulkanRenderer.h"
-
+#include "../include/Renderer/IBLSystem.h"
 
 
 std::vector<const char*> deviceExtensions = {
@@ -201,8 +201,7 @@ void VulkanRenderer::initVulkan() {
     // Make sure PBR pipeline is created if not done elsewhere
     
     
-    // Set the render mode to PBR
-    renderMode = RenderMode::Standard;
+    
     
     // Set up camera
     cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
@@ -211,8 +210,8 @@ void VulkanRenderer::initVulkan() {
     fov = 90.0f;
     nearPlane = 0.1f;
     farPlane = 10.0f;
-   createPBRTestScene();
-   
+    createPBRTestScene();
+    //scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
     
 }
 void VulkanRenderer::createInstance() {
@@ -562,7 +561,7 @@ void VulkanRenderer::createPBRPipeline() {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(ModelPushConstant) + sizeof(MaterialPushConstant);
+    pushConstantRange.size = sizeof(PushConstant);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -600,6 +599,7 @@ void VulkanRenderer::createPBRPipeline() {
     vkDestroyShaderModule(device, fragModule, nullptr);
     vkDestroyShaderModule(device, vertModule, nullptr);
 }
+
 
 void VulkanRenderer::createGraphicsPipeline() {
 
@@ -696,7 +696,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(ModelPushConstant);
+    pushConstantRange.size = sizeof(PushConstant);
     
 
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -930,148 +930,106 @@ void VulkanRenderer::createPBRTestScene() {
     // Set up default lighting
     scene->setupDefaultLighting();
     
-    // Create a grid of spheres with different material properties
+    // Add additional light to better show off the materials
+    scene->addLight(
+        glm::vec3(-4.0f, 3.0f, -2.0f),  // Position
+        glm::vec3(0.9f, 0.8f, 0.7f),    // Warm light color
+        3.0f,                           // Intensity
+        15.0f,                          // Radius
+        1.5f,                           // Falloff
+        false                           // Point light
+    );
     
     // Create sphere mesh data
     MeshData sphereData = modelLoader.CreateSphere(1.0f, 32, 32);
     
-    // Define the grid dimensions
-    const int GRID_SIZE = 5;
-    const float SPACING = 2.5f;
-    const float START_X = -((GRID_SIZE-1) * SPACING) / 2.0f;
-    const float START_Z = -((GRID_SIZE-1) * SPACING) / 2.0f;
+    // Place spheres in a line for easier comparison
+    const float SPACING = 3.0f;
+    const int NUM_SPHERES = 5;
     
-    // Create materials with varying metallic/roughness values
-    for (int x = 0; x < GRID_SIZE; x++) {
-        for (int z = 0; z < GRID_SIZE; z++) {
-            // Calculate position
-            float posX = START_X + x * SPACING;
-            float posZ = START_Z + z * SPACING;
-            
-            // Calculate material properties
-            float metallic = static_cast<float>(x) / static_cast<float>(GRID_SIZE - 1);
-            float roughness = static_cast<float>(z) / static_cast<float>(GRID_SIZE - 1);
-            roughness = glm::max(0.05f, roughness); // Avoid perfectly smooth surfaces
-            
-            // Create transform
-            Transform transform;
-            transform.position = glm::vec3(posX, 1.0f, posZ);
-            transform.scale = glm::vec3(1.0f);
-            
-            // Create material
-            auto material = std::make_shared<Material>();
-            material->diffuseColor = glm::vec3(0.8f, 0.8f, 0.8f); // White/light gray
-            material->setPBRProperties(metallic, roughness);
-            
-            // Create a texture for this material
-            auto metallicRoughnessTexture = TextureUtils::createDefaultMetallicRoughnessMap(
-                device,
-                physicalDevice,
-                commandPool,
-                graphicsQueue,
-                metallic,
-                roughness
-            );
-            
-            material->setTexture(TextureType::MetallicRoughness, metallicRoughnessTexture);
-            
-            // Create descriptor set for this material
-            VkDescriptorSet materialDescriptorSet = createMaterialDescriptorSet(*material);
-            material->setDescriptorSet(materialDescriptorSet);
-            
-            // Create a mesh with this material
-            auto mesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, material);
-            mesh->createBuffers(commandPool, graphicsQueue);
-            
-            // Add to scene
-            scene->addMeshInstance(mesh, transform);
-        }
+    // Different material configurations to showcase PBR
+    std::vector<glm::vec3> colors = {
+        glm::vec3(0.95f, 0.95f, 0.95f),  // Almost white
+        glm::vec3(0.95f, 0.2f, 0.2f),    // Red
+        glm::vec3(0.2f, 0.95f, 0.2f),    // Green
+        glm::vec3(0.3f, 0.3f, 0.95f),    // Blue
+        glm::vec3(0.95f, 0.84f, 0.1f)    // Gold-like
+    };
+    
+    std::vector<float> metallicValues = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    std::vector<float> roughnessValues = {0.1f, 0.3f, 0.6f, 0.9f, 0.2f};
+    
+    for (int i = 0; i < NUM_SPHERES; i++) {
+        float posX = -((NUM_SPHERES-1) * SPACING) / 2.0f + i * SPACING;
+        
+        // Create transform
+        Transform transform;
+        transform.position = glm::vec3(posX, 1.0f, 0.0f);
+        transform.scale = glm::vec3(1.0f);
+        
+        // Create material with different properties
+        auto material = std::make_shared<Material>();
+        material->diffuseColor = colors[i];
+        material->setPBRProperties(metallicValues[i], roughnessValues[i]);
+        
+        std::cout << "Creating sphere " << i << " at " << posX
+                  << " with color " << material->diffuseColor.r 
+                  << "," << material->diffuseColor.g 
+                  << "," << material->diffuseColor.b 
+                  << " metallic: " << metallicValues[i]
+                  << " roughness: " << roughnessValues[i] << std::endl;
+        
+        // Skip using any textures for now
+        material->setTexture(TextureType::Diffuse, nullptr);
+        material->setTexture(TextureType::MetallicRoughness, nullptr);
+        
+        // Important: Create descriptor set for this material
+        VkDescriptorSet materialDescriptorSet = createMaterialDescriptorSet(*material);
+        material->setDescriptorSet(materialDescriptorSet);
+        
+        std::vector<MeshData> singleSphereMesh = { sphereData };
+        
+        // Call createMeshesFromData with this single sphere and its material
+        scene->createMeshesFromData(singleSphereMesh, transform, material);
     }
     
-    // Create a floor plane
-    MeshData planeData = modelLoader.CreatePlane(20.0f, 20.0f);
-    
-    // Create floor transform
-    Transform floorTransform;
-    floorTransform.position = glm::vec3(0.0f, -1.0f, 0.0f);
-    floorTransform.rotation = glm::vec3(0.0f);
-    floorTransform.scale = glm::vec3(1.0f);
-    
-    // Create floor material
-    auto floorMaterial = std::make_shared<Material>();
-    floorMaterial->diffuseColor = glm::vec3(0.1f, 0.1f, 0.1f); // Dark gray
-    floorMaterial->setPBRProperties(0.0f, 0.9f); // Non-metallic, rough
-    
-    // Create descriptor set for floor material
-    VkDescriptorSet floorDescriptorSet = createMaterialDescriptorSet(*floorMaterial);
-    floorMaterial->setDescriptorSet(floorDescriptorSet);
-    
-    // Create floor mesh
-    auto floorMesh = std::make_shared<Mesh>(device, physicalDevice, planeData, floorMaterial);
-    floorMesh->createBuffers(commandPool, graphicsQueue);
-    
-    // Add floor to scene
-    scene->addMeshInstance(floorMesh, floorTransform);
-    
-    // Add a few more colored spheres with different materials
-    
-    // Gold sphere
-    Transform goldTransform;
-    goldTransform.position = glm::vec3(-6.0f, 1.0f, -3.0f);
-    goldTransform.scale = glm::vec3(1.5f);
-    
-    auto goldMaterial = std::make_shared<Material>();
-    goldMaterial->diffuseColor = glm::vec3(1.0f, 0.765f, 0.336f); // Gold color
-    goldMaterial->setPBRProperties(1.0f, 0.1f); // Metallic, smooth
-    
-    VkDescriptorSet goldDescriptorSet = createMaterialDescriptorSet(*goldMaterial);
-    goldMaterial->setDescriptorSet(goldDescriptorSet);
-    
-    auto goldMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, goldMaterial);
-    goldMesh->createBuffers(commandPool, graphicsQueue);
-    scene->addMeshInstance(goldMesh, goldTransform);
-    
-    // Ruby sphere
-    Transform rubyTransform;
-    rubyTransform.position = glm::vec3(6.0f, 1.0f, -3.0f);
-    rubyTransform.scale = glm::vec3(1.5f);
-    
-    auto rubyMaterial = std::make_shared<Material>();
-    rubyMaterial->diffuseColor = glm::vec3(0.9f, 0.1f, 0.1f); // Ruby red
-    rubyMaterial->setPBRProperties(0.0f, 0.1f); // Dielectric, smooth
-    
-    VkDescriptorSet rubyDescriptorSet = createMaterialDescriptorSet(*rubyMaterial);
-    rubyMaterial->setDescriptorSet(rubyDescriptorSet);
-    
-    auto rubyMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, rubyMaterial);
-    rubyMesh->createBuffers(commandPool, graphicsQueue);
-    scene->addMeshInstance(rubyMesh, rubyTransform);
-    
-    // Jade sphere
-    Transform jadeTransform;
-    jadeTransform.position = glm::vec3(0.0f, 1.0f, -7.0f);
-    jadeTransform.scale = glm::vec3(1.5f);
-    
-    auto jadeMaterial = std::make_shared<Material>();
-    jadeMaterial->diffuseColor = glm::vec3(0.135f, 0.8f, 0.435f); // Jade green
-    jadeMaterial->setPBRProperties(0.0f, 0.3f); // Dielectric, medium roughness
-    
-    VkDescriptorSet jadeDescriptorSet = createMaterialDescriptorSet(*jadeMaterial);
-    jadeMaterial->setDescriptorSet(jadeDescriptorSet);
-    
-    auto jadeMesh = std::make_shared<Mesh>(device, physicalDevice, sphereData, jadeMaterial);
-    jadeMesh->createBuffers(commandPool, graphicsQueue);
-    scene->addMeshInstance(jadeMesh, jadeTransform);
-    
-    // Position the camera to view the scene
-    cameraPos = glm::vec3(8.0f, 7.0f, 8.0f);
+    // Set up camera
+    cameraPos = glm::vec3(0.0f, 2.0f, 8.0f);
     cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
     cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-    
+  
     // Enable PBR rendering
     renderMode = RenderMode::PBR;
+    std::cout << "Set render mode to PBR" << std::endl;
+}
+
+PushConstant VulkanRenderer::createPushConstant(const glm::mat4& model, const Material& material) {
+    PushConstant pushConstant{};
     
-    std::cout << "PBR test scene created" << std::endl;
+    // Set model matrix
+    pushConstant.model = model;
+    
+    // Set base color (RGB) and alpha
+    pushConstant.baseColorFactor = glm::vec4(material.diffuseColor, material.alpha);
+    
+    // Set PBR properties
+    pushConstant.metallicFactor = material.metallic;
+    pushConstant.roughnessFactor = material.roughness;
+    pushConstant.ambientOcclusion = 1.0f; // Default to full AO if no texture
+    pushConstant.emissiveFactor = material.emissiveStrength;
+    
+    // Set texture flags
+    pushConstant.hasAlbedoMap = material.hasTexture(TextureType::Diffuse) ? 1 : 0;
+    pushConstant.hasNormalMap = material.hasTexture(TextureType::Normal) ? 1 : 0;
+    
+    // Handle metallic/roughness textures
+    pushConstant.hasMetallicRoughnessMap = material.hasTexture(TextureType::MetallicRoughness) ? 1 : 
+                                         (material.hasTexture(TextureType::Metallic) && 
+                                          material.hasTexture(TextureType::Roughness)) ? 1 : 0;
+    
+    pushConstant.hasEmissiveMap = material.hasTexture(TextureType::Emissive) ? 1 : 0;
+    
+    return pushConstant;
 }
 
 void VulkanRenderer::drawFrame() {
@@ -1153,21 +1111,23 @@ void VulkanRenderer::drawFrame() {
     // Update the view and projection matrices
     updateViewProjection(view, proj);
     
+    if (renderMode == RenderMode::PBR_IBL && iblSystem && iblSystem->isReady()) {
+        // Bind IBL descriptor set (assuming it's set index 3)
+        vkCmdBindDescriptorSets(
+            commandBuffers[imageIndex],
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pbrPipelineLayout,
+            3,  // Set index 3
+            1,  // One descriptor set
+            &iblSystem->getDescriptorSets()[currentFrame],
+            0, nullptr
+        );
+    }
     // Update lights for PBR
     if (renderMode == RenderMode::PBR || renderMode == RenderMode::PBR_IBL) {
         updateLights();
         
-        // DEBUG: Print light info
-        LightUniformBuffer* lightData = (LightUniformBuffer*)lightUniformBuffersMapped[currentFrame];
-        std::cout << "Light count: " << lightData->lightCount << std::endl;
-        for (int i = 0; i < lightData->lightCount; i++) {
-            std::cout << "Light " << i 
-                    << " - Type: " << (lightData->lights[i].position.w < 0.5 ? "Directional" : "Point")
-                    << ", Intensity: " << lightData->lights[i].color.a 
-                    << ", Position/Dir: " << lightData->lights[i].position.x << ","
-                    << lightData->lights[i].position.y << ","
-                    << lightData->lights[i].position.z << std::endl;
-        }
+      
         
         // Bind the PBR pipeline
         vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pbrPipeline);
@@ -1646,91 +1606,12 @@ void VulkanRenderer::createMaterialUniformBuffers() {
     }
 }
 
-void VulkanRenderer::updateMaterialProperties(const Material& material) {
-    MaterialUniformBuffer materialData{};
-    
-    // Set base properties
-    materialData.baseColorFactor = glm::vec4(material.diffuseColor, material.alpha);
-    materialData.metallicFactor = material.metallic;
-    materialData.roughnessFactor = material.roughness;
-    materialData.aoStrength = 1.0f;  // Default full strength
-    materialData.emissiveStrength = material.emissiveStrength;
-    
-    // Set texture flags
-    materialData.hasBaseColorMap = material.hasTexture(TextureType::Diffuse) ? 1 : 0;
-    materialData.hasNormalMap = material.hasTexture(TextureType::Normal) ? 1 : 0;
-    materialData.hasMetallicRoughnessMap = 
-        (material.hasTexture(TextureType::Metallic) || material.hasTexture(TextureType::Roughness)) ? 1 : 0;
-    materialData.hasOcclusionMap = material.hasTexture(TextureType::AmbientOcclusion) ? 1 : 0;
-    materialData.hasEmissiveMap = material.hasTexture(TextureType::Emissive) ? 1 : 0;
-    
-    // Alpha settings (defaults for now)
-    materialData.alphaCutoff = 0.5f;
-    materialData.alphaMode = 0;  // Opaque
-    
-    // Copy data to the current frame's uniform buffer
-    memcpy(materialUniformBuffersMapped[currentFrame], &materialData, sizeof(materialData));
-}
 
 
-void VulkanRenderer::updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo) {
-    // Update MVP descriptor sets
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i];
-        bufferInfo.offset = 0;
-        bufferInfo.range = sizeof(UniformBufferObject);
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = mvpDescriptorSets[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
 
-        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-    }
-    std::cout << "Updated texture descriptor" << std::endl;
-    // Update texture descriptor
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = materialDescriptorSets[currentFrame];
-    descriptorWrite.dstBinding = 0;  // Now this binding exists!
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pImageInfo = &imageInfo;
-    
-    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-}
 
-MaterialPushConstant VulkanRenderer::createMaterialPushConstant(const Material& material) {
-    MaterialPushConstant pushConstant{};
-    
-    // Set base color (RGB) and alpha
-    pushConstant.baseColorFactor = glm::vec4(material.diffuseColor, material.alpha);
-    
-    // Set PBR properties
-    pushConstant.metallicFactor = material.metallic;
-    pushConstant.roughnessFactor = material.roughness;
-    pushConstant.ambientOcclusion = 1.0f; // Default to full AO if no texture
-    pushConstant.emissiveFactor = material.emissiveStrength;
-    
-    // Set texture flags
-    pushConstant.hasAlbedoMap = material.hasTexture(TextureType::Diffuse) ? 1 : 0;
-    pushConstant.hasNormalMap = material.hasTexture(TextureType::Normal) ? 1 : 0;
-    
-    // Handle metallic/roughness textures
-    pushConstant.hasMetallicRoughnessMap = material.hasTexture(TextureType::MetallicRoughness) ? 1 : 
-                                         (material.hasTexture(TextureType::Metallic) && 
-                                          material.hasTexture(TextureType::Roughness)) ? 1 : 0;
-    
-    pushConstant.hasEmissiveMap = material.hasTexture(TextureType::Emissive) ? 1 : 0;
-    
-    return pushConstant;
-}
+
 // Update updateLights method in VulkanRenderer.cpp
 void VulkanRenderer::updateLights() {
     // Get the lights from the scene
@@ -1741,7 +1622,7 @@ void VulkanRenderer::updateLights() {
     
     // Initialize with safe defaults
     lightData.lightCount = 0;
-    lightData.ambientColor = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);  // Increase ambient for visibility
+    //lightData.ambientColor = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);  // Increase ambient for visibility
     
     // Debug output
     std::cout << "Updating lights, count: " << lights.size() << std::endl;
@@ -1768,12 +1649,7 @@ void VulkanRenderer::updateLights() {
         lightData.lights[i].radius = light.radius;
         lightData.lights[i].falloff = light.falloff;
         
-        std::cout << "Light " << i << ": " 
-                 << (light.isDirectional ? "Directional" : "Point") 
-                 << ", Position/Dir: " << lightData.lights[i].position.x << ","
-                 << lightData.lights[i].position.y << ","
-                 << lightData.lights[i].position.z 
-                 << ", Intensity: " << light.intensity << std::endl;
+        
     }
     
     // Update the light uniform buffer
@@ -1827,6 +1703,30 @@ VkDescriptorSet VulkanRenderer::createMaterialDescriptorSet(const Material& mate
     return descriptorSet;
 }
 
+bool VulkanRenderer::setupIBL(const std::string& hdriPath) {
+    // Create IBL system if not already created
+    if (!iblSystem) {
+        iblSystem = std::make_unique<IBLSystem>(this);
+    }
+    
+    // Initialize IBL system with the provided HDRI
+    if (!iblSystem->initialize(hdriPath)) {
+        std::cerr << "Failed to initialize IBL system" << std::endl;
+        return false;
+    }
+    
+    // Store the descriptor set layout for cleanup
+    iblDescriptorSetLayout = iblSystem->getDescriptorSetLayout();
+    
+    // Switch to PBR_IBL rendering mode
+    renderMode = RenderMode::PBR_IBL;
+    std::cout << "Switched to PBR_IBL rendering mode" << std::endl;
+    
+    return true;
+}
+
+
+
 VkPipelineLayout VulkanRenderer::getPipelineLayout()
 {
     return pipelineLayout;
@@ -1875,10 +1775,11 @@ void VulkanRenderer::cleanup() {
     }
 
     // Cleanup IBL resources TODO: implement IBL
-    if (renderMode == RenderMode::PBR_IBL) {
-       
+    if (iblDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, iblDescriptorSetLayout, nullptr);
+        iblDescriptorSetLayout = VK_NULL_HANDLE;
     }
-
+    
     // Cleanup default textures
     defaultTexture.reset();
     defaultAlbedoTexture.reset();
@@ -1899,7 +1800,7 @@ void VulkanRenderer::cleanup() {
 
     // Cleanup scene (this will clean up all meshes and textures)
     scene.reset();
-
+    iblSystem.reset();
     // Cleanup synchronization objects
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);

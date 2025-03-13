@@ -20,6 +20,9 @@
 #include "include/Utils/TextureUtils.h"
 #include "include/scene/Scene.h"
 
+class IBLSystem;
+
+
 
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR capabilities;
@@ -32,8 +35,17 @@ struct QueueFamilyIndices {
     bool isComplete() { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
 
-struct ModelPushConstant {
-    glm::mat4 model;
+struct PushConstant {//push constant for pbr
+    alignas(16) glm::mat4 model;           // Model matrix
+    alignas(16) glm::vec4 baseColorFactor; // RGB + alpha
+    alignas(4) float metallicFactor;
+    alignas(4) float roughnessFactor;
+    alignas(4) float ambientOcclusion;
+    alignas(4) float emissiveFactor;
+    alignas(4) int hasAlbedoMap;
+    alignas(4) int hasNormalMap;
+    alignas(4) int hasMetallicRoughnessMap;
+    alignas(4) int hasEmissiveMap;
 };
 
 
@@ -71,14 +83,28 @@ private:
     VkDescriptorImageInfo getTextureImageInfo(const std::shared_ptr<Texture>& texture, 
                                              std::shared_ptr<Texture> defaultTexture);
     void createPBRTestScene();
+    
+ 
 
+    
 public:
     enum class RenderMode {
         Standard,
         PBR,
         PBR_IBL
     };
-   
+
+    // IBL setup methods
+    bool setupIBL(const std::string& hdriPath);
+    
+    // Getter for IBL system
+    IBLSystem* getIBLSystem() { return iblSystem.get(); }
+
+    VkDescriptorPool getDescriptorPool() const { return descriptorPool; }
+    uint32_t getMaxFramesInFlight() const { return MAX_FRAMES_IN_FLIGHT; }
+    
+    static PushConstant createPushConstant(const glm::mat4& model, const Material& material);
+    
     void updateViewProjection(const glm::mat4& view, const glm::mat4& proj);
     // Create a descriptor set for a specific material
     VkDescriptorSet createMaterialDescriptorSet(const Material& material);
@@ -117,12 +143,6 @@ public:
         glm::vec3 cameraPos;
         float time;
     };
-public: //texture related
-    // Update texture descriptor
-    void updateTextureDescriptor(const VkDescriptorImageInfo& imageInfo);
-    MaterialPushConstant createMaterialPushConstant(const Material& material);
-
-    // Get the current descriptor set
     
 public: //light related
     struct LightData {
@@ -154,9 +174,11 @@ public: //light related
     void updateLights();
    
 public:
+
+    
     void createDefaultTextures();
     void createMaterialUniformBuffers();
-    void updateMaterialProperties(const Material& material);
+    
     void updateAllTextureDescriptors(const Material& material);
     ModelLoader modelLoader;
     VkPipeline getGraphicsPipeline () const { return graphicsPipeline; } // getGraphicsPipeline()
@@ -171,6 +193,7 @@ private:
 
  
     // IBL-related resources
+    std::unique_ptr<IBLSystem> iblSystem;
     VkDescriptorSetLayout iblDescriptorSetLayout;
     VkDescriptorSet iblDescriptorSet;
     VkPipelineLayout pbrPipelineLayout;  // Pipeline layout for PBR rendering

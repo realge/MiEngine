@@ -38,17 +38,18 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 
 // Material properties
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
-layout(push_constant) uniform MaterialConstants {
-    vec4 baseColorFactor;
-    float metallicFactor;
-    float roughnessFactor;
-    float ambientOcclusion;
-    float emissiveFactor;
-    int hasAlbedoMap;
-    int hasNormalMap;
-    int hasMetallicRoughnessMap;
-    int hasEmissiveMap;
-} material;
+layout(push_constant) uniform PushConstants {
+     layout(offset = 0) mat4 model;
+     layout(offset = 64) vec4 baseColorFactor;
+     layout(offset = 80) float metallicFactor;
+     layout(offset = 84) float roughnessFactor;
+     layout(offset = 88) float ambientOcclusion;
+     layout(offset = 92) float emissiveFactor;
+     layout(offset = 96) int hasAlbedoMap;
+     layout(offset = 100) int hasNormalMap;
+     layout(offset = 104) int hasMetallicRoughnessMap;
+     layout(offset = 108) int hasEmissiveMap;
+} pushConstants;
 
 // Light data
 layout(set = 2, binding = 0) uniform LightBuffer {
@@ -107,10 +108,10 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 void main() {
     // Sample albedo texture or use base color
     vec4 albedo;
-    if (material.hasAlbedoMap > 0) {
+    if (pushConstants.hasAlbedoMap > 0) {
         albedo = texture(albedoMap, fragTexCoord);
     } else {
-        albedo = material.baseColorFactor;
+        albedo = pushConstants.baseColorFactor;
     }
     
     // Mix vertex color if needed
@@ -122,9 +123,9 @@ void main() {
     }
     
     // Get material properties
-    float metallic = material.metallicFactor;
-    float roughness = material.roughnessFactor;
-    float ao = material.ambientOcclusion;
+    float metallic = pushConstants.metallicFactor;
+    float roughness = pushConstants.roughnessFactor;
+    float ao = pushConstants.ambientOcclusion;
     
     // Normalize vectors
     vec3 N = normalize(fragNormal);
@@ -196,9 +197,9 @@ void main() {
     vec3 color = ambient + Lo;
     
     // Add emissive if present
-    if (material.hasEmissiveMap > 0) {
+    if (pushConstants.hasEmissiveMap > 0) {
         // Would sample emissive map here if we had it
-        //vec3 emissive = texture(emissiveMap, fragTexCoord).rgb * material.emissiveFactor;
+        //vec3 emissive = texture(emissiveMap, fragTexCoord).rgb * pushConstants.emissiveFactor;
         //color += emissive;
     }
     

@@ -137,15 +137,5 @@ private:
 };
 
 // Material push constants (for fragment shader)
-struct MaterialPushConstant {
-    alignas(16) glm::vec4 baseColorFactor;
-    alignas(4) float metallicFactor;
-    alignas(4) float roughnessFactor;
-    alignas(4) float ambientOcclusion;
-    alignas(4) float emissiveFactor;
-    alignas(4) int hasAlbedoMap;
-    alignas(4) int hasNormalMap;
-    alignas(4) int hasMetallicRoughnessMap;
-    alignas(4) int hasEmissiveMap;
-};
+
 

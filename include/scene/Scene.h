@@ -58,6 +58,10 @@ public:
     Scene(VulkanRenderer* renderer);
     ~Scene();
 
+    void createMeshesFromData(const std::vector<MeshData>& meshDataList, 
+                          const Transform& transform,
+                          const std::shared_ptr<Material>& material);
+
     // Load a model and add all its meshes to the scene
     bool loadModel(const std::string& filename, const Transform& transform = Transform());
     void createMeshesFromData(const std::vector<MeshData>& meshDataList, const Transform& transform);
@@ -114,9 +118,7 @@ private:
     ModelLoader modelLoader;
 
     // Helper to create mesh objects from loaded mesh data
-    void createMeshesFromData(const std::vector<MeshData>& meshDataList, 
-                          const Transform& transform,
-                          const std::shared_ptr<Material>& material);;
+    
     
     // Load or retrieve a cached texture
     std::shared_ptr<Texture> loadTexture(const std::string& filename);
