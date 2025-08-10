@@ -1,0 +1,6 @@
+﻿/MiEngine.sln
+.vs/
+bin/
+obj/
+*.user
+*.suo
