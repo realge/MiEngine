@@ -11,7 +11,9 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec3 cameraPos;       // Camera position in world space
     float time;           // Time for animations (if needed)
 } ubo;
+
 const int MAX_LIGHTS = 16; 
+
 // Push constant for model matrix - per-instance data
 layout(push_constant) uniform PushConstants {
    layout(offset = 0) mat4 model;           // Model matrix from push constant
@@ -43,7 +45,7 @@ layout(location = 1) out vec2 fragTexCoord;     // Texture coordinates
 layout(location = 2) out vec3 fragNormal;       // World-space normal
 layout(location = 3) out vec3 fragPosition;     // World-space position
 layout(location = 4) out mat3 TBN;              // Tangent-Bitangent-Normal matrix
-layout(location = 7) out vec3 fragViewDir;      // View direction in tangent space
+layout(location = 7) out vec3 fragViewDir;      // View direction in world space (not tangent space)
 
 void main() {
     //--------------------------------------------------------------------------
@@ -61,35 +63,42 @@ void main() {
     //--------------------------------------------------------------------------
     // Normal and Tangent Space Calculation
     //--------------------------------------------------------------------------
-    // Calculate normal matrix (inverse transpose of model matrix's 3x3 part)
-    mat3 normalMatrix = transpose(inverse(mat3(pushConstants.model)));
+    // For uniform scaling, we can use the model matrix directly
+    // For non-uniform scaling, we'd need the inverse transpose, but that's expensive
+    // Most engines pre-calculate this on the CPU
+    mat3 modelMatrix3x3 = mat3(pushConstants.model);
     
-    // Transform normal and tangent to world space
-    vec3 N = normalize(normalMatrix * inNormal);
-    vec3 T = normalize(normalMatrix * inTangent.xyz);
+    // Transform normal to world space and normalize
+    vec3 N = normalize(modelMatrix3x3 * inNormal);
     
-    // Ensure T is perpendicular to N using Gram-Schmidt process
+    // Transform tangent to world space
+    vec3 T = normalize(modelMatrix3x3 * inTangent.xyz);
+    
+    // Re-orthogonalize T with respect to N (Gram-Schmidt)
+    // This is important to handle non-orthogonal TBN from artists/exporters
     T = normalize(T - dot(T, N) * N);
     
-    // Calculate bitangent using the handedness stored in tangent.w
-    vec3 B = normalize(cross(N, T) * inTangent.w);
+    // Calculate bitangent with correct handedness
+    vec3 B = cross(N, T) * inTangent.w;
     
-    // Create TBN matrix for normal mapping
+    // Create TBN matrix for transforming from tangent to world space
+    // Note: This is the transpose of what you might expect
+    // because we want to transform FROM tangent TO world space
     TBN = mat3(T, B, N);
+    
+    // Output the world space normal directly
+    fragNormal = N;
     
     //--------------------------------------------------------------------------
     // View Direction Calculation
     //--------------------------------------------------------------------------
-    // Calculate view direction in world space
-    vec3 worldViewDir = ubo.cameraPos - fragPosition;
-    
-    // Transform view direction to tangent space
-    fragViewDir = normalize(transpose(TBN) * worldViewDir);
+    // Calculate view direction in world space (fragment shader will normalize)
+    // We don't transform to tangent space here - let the fragment shader decide
+    fragViewDir = ubo.cameraPos - fragPosition;
     
     //--------------------------------------------------------------------------
     // Pass-through Attributes
     //--------------------------------------------------------------------------
     fragColor = inColor;
     fragTexCoord = inTexCoord;
-    fragNormal = N;
 }

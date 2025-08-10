@@ -8,6 +8,736 @@
 #include <glm/ext/quaternion_geometric.hpp>
 #include <glm/ext/scalar_constants.hpp>
 
+TextureUtils::IBLConfig TextureUtils::iblConfig;  
+
+static std::shared_ptr<CubemapData> g_currentEnvironmentData = nullptr;
+
+// Add this at the top of TextureUtils.cpp after includes:
+namespace {
+    // Cache for environment cubemap data
+    std::unordered_map<void*, std::shared_ptr<CubemapData>> g_cubemapCache;
+}
+
+// Implementation of CubemapData::sample
+glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) const {
+    // Normalize direction
+    glm::vec3 dir = glm::normalize(direction);
+    
+    // Determine which face to sample and convert to UV coordinates
+    float absX = std::abs(dir.x);
+    float absY = std::abs(dir.y);
+    float absZ = std::abs(dir.z);
+    
+    uint32_t faceIndex;
+    float u, v;
+    float maxAxis;
+    
+    if (absX >= absY && absX >= absZ) {
+        // X face (right or left)
+        maxAxis = absX;
+        if (dir.x > 0.0f) {
+            // +X face (0)
+            faceIndex = 0;
+            u = -dir.z / absX;
+            v = -dir.y / absX;
+        } else {
+            // -X face (1)
+            faceIndex = 1;
+            u = dir.z / absX;
+            v = -dir.y / absX;
+        }
+    } else if (absY >= absX && absY >= absZ) {
+        // Y face (top or bottom)
+        maxAxis = absY;
+        if (dir.y > 0.0f) {
+            // +Y face (2)
+            faceIndex = 2;
+            u = dir.x / absY;
+            v = dir.z / absY;
+        } else {
+            // -Y face (3)
+            faceIndex = 3;
+            u = dir.x / absY;
+            v = -dir.z / absY;
+        }
+    } else {
+        // Z face (front or back)
+        maxAxis = absZ;
+        if (dir.z > 0.0f) {
+            // +Z face (4)
+            faceIndex = 4;
+            u = dir.x / absZ;
+            v = -dir.y / absZ;
+        } else {
+            // -Z face (5)
+            faceIndex = 5;
+            u = -dir.x / absZ;
+            v = -dir.y / absZ;
+        }
+    }
+    
+    // Convert from [-1, 1] to [0, 1]
+    u = u * 0.5f + 0.5f;
+    v = v * 0.5f + 0.5f;
+    
+    // Calculate mip level size
+    uint32_t mipSize = faceSize >> mipLevel;
+    if (mipSize < 1) mipSize = 1;
+    
+    // Convert UV to texel coordinates with bilinear filtering
+    float fx = u * (mipSize - 1);
+    float fy = v * (mipSize - 1);
+    
+    uint32_t x0 = static_cast<uint32_t>(std::floor(fx));
+    uint32_t y0 = static_cast<uint32_t>(std::floor(fy));
+    uint32_t x1 = std::min(x0 + 1, mipSize - 1);
+    uint32_t y1 = std::min(y0 + 1, mipSize - 1);
+    
+    float dx = fx - x0;
+    float dy = fy - y0;
+    
+    // Get face data pointer
+    const float* faceData = getFaceData(faceIndex, mipLevel);
+    
+    // Sample 4 texels for bilinear filtering
+    auto getPixel = [&](uint32_t x, uint32_t y) -> glm::vec3 {
+        size_t idx = (y * mipSize + x) * 4;  // 4 floats per pixel (RGBA)
+        return glm::vec3(faceData[idx], faceData[idx + 1], faceData[idx + 2]);
+    };
+    
+    glm::vec3 c00 = getPixel(x0, y0);
+    glm::vec3 c10 = getPixel(x1, y0);
+    glm::vec3 c01 = getPixel(x0, y1);
+    glm::vec3 c11 = getPixel(x1, y1);
+    
+    // Bilinear interpolation
+    glm::vec3 c0 = glm::mix(c00, c10, dx);
+    glm::vec3 c1 = glm::mix(c01, c11, dx);
+    glm::vec3 color = glm::mix(c0, c1, dy);
+    
+    return color;
+}
+
+// Get pointer to specific face data
+const float* CubemapData::getFaceData(uint32_t face, uint32_t mipLevel) const {
+    size_t offset = getOffset(face, mipLevel);
+    return &data[offset / sizeof(float)];
+}
+
+// Calculate offset for a specific mip level and face
+size_t CubemapData::getOffset(uint32_t face, uint32_t mipLevel) const {
+    size_t offset = 0;
+    
+    // Add sizes of all previous mip levels
+    for (uint32_t mip = 0; mip < mipLevel; ++mip) {
+        uint32_t mipSize = faceSize >> mip;
+        if (mipSize < 1) mipSize = 1;
+        offset += mipSize * mipSize * 4 * sizeof(float) * 6; // All 6 faces at this mip level
+    }
+    
+    // Add offset for faces at current mip level
+    uint32_t currentMipSize = faceSize >> mipLevel;
+    if (currentMipSize < 1) currentMipSize = 1;
+    offset += face * currentMipSize * currentMipSize * 4 * sizeof(float);
+    
+    return offset;
+}
+
+// Read cubemap from GPU to CPU memory
+std::shared_ptr<CubemapData> TextureUtils::readCubemapFromGPU(
+    VkDevice device,
+    VkPhysicalDevice physicalDevice,
+    VkCommandPool commandPool,
+    VkQueue graphicsQueue,
+    std::shared_ptr<Texture> cubemapTexture)
+{
+    if (!cubemapTexture) {
+        std::cerr << "Invalid cubemap texture provided" << std::endl;
+        return nullptr;
+    }
+    
+    // Get image properties
+    VkImage image = cubemapTexture->getImage();
+    VkFormat format = cubemapTexture->getFormat();
+    uint32_t mipLevels = cubemapTexture->getMipLevels();
+    
+    // For now, we'll read only mip level 0 (full resolution)
+    // You can extend this to read all mip levels if needed
+    const uint32_t mipLevel = 0;
+    const uint32_t faceSize = 1024; // Assuming your cubemap is 1024x1024
+    const uint32_t numFaces = 6;
+    
+    auto cubemapData = std::make_shared<CubemapData>();
+    cubemapData->faceSize = faceSize;
+    cubemapData->mipLevels = 1; // Only reading mip 0 for now
+    
+    // Calculate total data size
+    VkDeviceSize imageSize = faceSize * faceSize * 4 * sizeof(float) * numFaces;
+    cubemapData->data.resize(imageSize / sizeof(float));
+    
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = imageSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    
+    if (vkCreateBuffer(device, &bufferInfo, nullptr, &stagingBuffer) != VK_SUCCESS) {
+        std::cerr << "Failed to create staging buffer for cubemap read" << std::endl;
+        return nullptr;
+    }
+    
+    // Allocate memory for staging buffer
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, stagingBuffer, &memRequirements);
+    
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &stagingBufferMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        std::cerr << "Failed to allocate staging buffer memory" << std::endl;
+        return nullptr;
+    }
+    
+    vkBindBufferMemory(device, stagingBuffer, stagingBufferMemory, 0);
+    
+    // Copy image to buffer
+    VkCommandBufferAllocateInfo cmdAllocInfo{};
+    cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdAllocInfo.commandPool = commandPool;
+    cmdAllocInfo.commandBufferCount = 1;
+    
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(device, &cmdAllocInfo, &commandBuffer);
+    
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    
+    // Transition image layout for transfer
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = mipLevel;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = numFaces;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+    
+    // Copy each face
+    for (uint32_t face = 0; face < numFaces; ++face) {
+        VkBufferImageCopy region{};
+        region.bufferOffset = face * faceSize * faceSize * 4 * sizeof(float);
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = mipLevel;
+        region.imageSubresource.baseArrayLayer = face;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {faceSize, faceSize, 1};
+        
+        vkCmdCopyImageToBuffer(
+            commandBuffer,
+            image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            stagingBuffer,
+            1,
+            &region
+        );
+    }
+    
+    // Transition back to shader read
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+    
+    vkEndCommandBuffer(commandBuffer);
+    
+    // Submit command buffer
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    
+    // Copy data from staging buffer
+    void* data;
+    vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(cubemapData->data.data(), data, imageSize);
+    vkUnmapMemory(device, stagingBufferMemory);
+    
+    // Cleanup
+    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    
+    std::cout << "Successfully read cubemap from GPU (" << faceSize << "x" << faceSize << "x6 faces)" << std::endl;
+    return cubemapData;
+}
+
+// Cache environment map data
+void TextureUtils::cacheEnvironmentMap(std::shared_ptr<Texture> environmentMap, std::shared_ptr<CubemapData> data) {
+    if (environmentMap && data) {
+        g_cubemapCache[environmentMap.get()] = data;
+    }
+}
+
+
+
+
+// Get cached environment data
+std::shared_ptr<CubemapData> TextureUtils::getCachedEnvironmentData(std::shared_ptr<Texture> environmentMap) {
+    if (!environmentMap) return nullptr;
+    
+    auto it = g_cubemapCache.find(environmentMap.get());
+    if (it != g_cubemapCache.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+
+
+// Update this function to use cached data
+glm::vec3 sampleCubemapDirection(const glm::vec3& direction) {
+    if (g_currentEnvironmentData) {
+        // Use actual HDR data
+        return g_currentEnvironmentData->sample(direction, 0);
+    }
+    
+    // Fallback to procedural sky if no HDR data available
+    float y = direction.y * 0.5f + 0.5f;
+    glm::vec3 skyColor = glm::mix(
+        glm::vec3(0.8f, 0.85f, 0.9f),  // Horizon
+        glm::vec3(0.4f, 0.6f, 0.9f),   // Sky
+        y
+    );
+    
+    // Add sun
+    glm::vec3 sunDir = glm::normalize(glm::vec3(0.5f, 0.7f, 0.3f));
+    float sunDot = glm::max(0.0f, glm::dot(direction, sunDir));
+    skyColor += glm::vec3(1.0f, 0.9f, 0.7f) * pow(sunDot, 32.0f) * 2.0f;
+    
+    return skyColor;
+}
+
+// Add function to set current environment data
+void TextureUtils::setCurrentEnvironmentData(std::shared_ptr<CubemapData> data) {
+    g_currentEnvironmentData = data;
+}
+// Van Der Corput sequence for quasi-random sampling
+float RadicalInverse_VdC(uint32_t bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10f; // / 0x100000000
+}
+
+// Hammersley sequence for quasi-random 2D sampling
+glm::vec2 Hammersley(uint32_t i, uint32_t N) {
+    return glm::vec2(float(i) / float(N), RadicalInverse_VdC(i));
+}
+
+// GGX Normal Distribution Function
+float DistributionGGX(glm::vec3 N, glm::vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = std::max(glm::dot(N, H), 0.0f);
+    float NdotH2 = NdotH * NdotH;
+    
+    float num = a2;
+    float denom = (NdotH2 * (a2 - 1.0f) + 1.0f);
+    denom = glm::pi<float>() * denom * denom;
+    
+    return num / denom;
+}
+
+// Geometry function for IBL
+float GeometrySchlickGGX_IBL(float NdotV, float roughness) {
+    float a = roughness;
+    float k = (a * a) / 2.0f; // Note: Different k for IBL vs direct lighting
+    
+    float num = NdotV;
+    float denom = NdotV * (1.0f - k) + k;
+    
+    return num / denom;
+}
+
+float GeometrySmith_IBL(glm::vec3 N, glm::vec3 V, glm::vec3 L, float roughness) {
+    float NdotV = std::max(glm::dot(N, V), 0.0f);
+    float NdotL = std::max(glm::dot(N, L), 0.0f);
+    float ggx2 = GeometrySchlickGGX_IBL(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX_IBL(NdotL, roughness);
+    
+    return ggx1 * ggx2;
+}
+
+// Importance sample GGX distribution
+glm::vec3 ImportanceSampleGGX(glm::vec2 Xi, glm::vec3 N, float roughness) {
+    float a = roughness * roughness;
+    
+    float phi = 2.0f * glm::pi<float>() * Xi.x;
+    float cosTheta = std::sqrt((1.0f - Xi.y) / (1.0f + (a*a - 1.0f) * Xi.y));
+    float sinTheta = std::sqrt(1.0f - cosTheta * cosTheta);
+    
+    // From spherical coordinates to cartesian coordinates (in tangent space)
+    glm::vec3 H;
+    H.x = std::cos(phi) * sinTheta;
+    H.y = std::sin(phi) * sinTheta;
+    H.z = cosTheta;
+    
+    // From tangent-space H to world-space sample vector
+    glm::vec3 up = std::abs(N.z) < 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 tangent = glm::normalize(glm::cross(up, N));
+    glm::vec3 bitangent = glm::cross(N, tangent);
+    
+    glm::vec3 sampleVec = tangent * H.x + bitangent * H.y + N * H.z;
+    return glm::normalize(sampleVec);
+}
+
+// Replace the createPrefilterMap function with this complete implementation:
+// In TextureUtils.cpp, replace the face sampling loop in createPrefilterMap:
+
+std::shared_ptr<Texture> TextureUtils::createPrefilterMap(
+    VkDevice device,
+    VkPhysicalDevice physicalDevice,
+    VkCommandPool commandPool,
+    VkQueue graphicsQueue,
+    std::shared_ptr<Texture> environmentMap,
+    const IBLConfig* customConfig)
+{
+    if (!environmentMap) {
+        std::cerr << "No environment map provided for prefilter generation" << std::endl;
+        return nullptr;
+    }
+    
+    const IBLConfig& config = customConfig ? *customConfig : iblConfig;
+    const uint32_t prefilterSize = config.prefilterMapSize;
+    const uint32_t mipLevels = config.prefilterMipLevels;
+    
+    std::cout << "Creating prefiltered environment map with size: " << prefilterSize 
+              << "x" << prefilterSize << " and " << mipLevels << " mip levels" << std::endl;
+    
+    // Create cubemap image
+    VkImage prefilterImage;
+    VkDeviceMemory prefilterMemory;
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = prefilterSize;
+    imageInfo.extent.height = prefilterSize;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.arrayLayers = 6;
+    imageInfo.format = format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    
+    if (vkCreateImage(device, &imageInfo, nullptr, &prefilterImage) != VK_SUCCESS) {
+        std::cerr << "Failed to create prefilter map image!" << std::endl;
+        return nullptr;
+    }
+    
+    // Allocate memory
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, prefilterImage, &memRequirements);
+    
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, 
+                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &prefilterMemory) != VK_SUCCESS) {
+        vkDestroyImage(device, prefilterImage, nullptr);
+        return nullptr;
+    }
+    
+    vkBindImageMemory(device, prefilterImage, prefilterMemory, 0);
+    
+    // Transition to transfer destination
+    transitionImageLayout(device, commandPool, graphicsQueue, prefilterImage, format,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        0, 6, 0, mipLevels);
+    
+    std::cout << "Generating prefiltered environment map..." << std::endl;
+    
+    // Process each mip level
+    for (uint32_t mip = 0; mip < mipLevels; mip++) {
+        uint32_t mipSize = prefilterSize >> mip;
+        if (mipSize < 1) mipSize = 1;
+        
+        float roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
+        
+        // Adaptive sample count based on roughness
+        uint32_t sampleCount = config.prefilterBaseSamples;
+        if (roughness > 0.5f) {
+            sampleCount = config.prefilterBaseSamples * 2;
+        }
+        
+        std::cout << "  Mip " << mip << " (size: " << mipSize << ", roughness: " << roughness 
+                  << ", samples: " << sampleCount << ")" << std::endl;
+        
+        // Create staging buffer
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        VkDeviceSize bufferSize = mipSize * mipSize * 4 * sizeof(float);
+        
+        createBuffer(device, physicalDevice, bufferSize, 
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    stagingBuffer, stagingBufferMemory);
+        
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+        
+        // Process each face
+        for (uint32_t face = 0; face < 6; face++) {
+            std::vector<float> faceData(mipSize * mipSize * 4);
+            
+            #pragma omp parallel for collapse(2)
+            for (uint32_t y = 0; y < mipSize; y++) {
+                for (uint32_t x = 0; x < mipSize; x++) {
+                    // CRITICAL FIX: Use proper UV mapping that accounts for texel centers
+                    // This ensures seamless edges between cubemap faces
+                    
+                    // Calculate UV coordinates with proper texel center sampling
+                    // Add 0.5 to get texel center, then normalize to [-1, 1] range
+                    float u = ((x + 0.5f) / float(mipSize)) * 2.0f - 1.0f;
+                    float v = ((y + 0.5f) / float(mipSize)) * 2.0f - 1.0f;
+                    
+                    // For edge texels, slightly adjust to prevent sampling artifacts
+                    // This helps maintain seamless connections between faces
+                    const float edgeFix = 1.0f / float(mipSize);
+                    u = u * (1.0f - edgeFix);
+                    v = v * (1.0f - edgeFix);
+                    
+                    glm::vec3 N;
+                    switch (face) {
+                        case 0: // +X
+                            N = glm::normalize(glm::vec3(1.0f, -v, -u));
+                            break;
+                        case 1: // -X
+                            N = glm::normalize(glm::vec3(-1.0f, -v, u));
+                            break;
+                        case 2: // +Y
+                            N = glm::normalize(glm::vec3(u, 1.0f, v));
+                            break;
+                        case 3: // -Y
+                            N = glm::normalize(glm::vec3(u, -1.0f, -v));
+                            break;
+                        case 4: // +Z
+                            N = glm::normalize(glm::vec3(u, -v, 1.0f));
+                            break;
+                        case 5: // -Z
+                            N = glm::normalize(glm::vec3(-u, -v, -1.0f));
+                            break;
+                    }
+                    
+                    glm::vec3 prefilteredColor(0.0f);
+                    float totalWeight = 0.0f;
+                    
+                    // For roughness = 0, just sample the reflection direction
+                    if (roughness < 0.01f) {
+                        prefilteredColor = sampleCubemapDirection(N);
+                    } else {
+                        // Importance sampling for rough surfaces
+                        glm::vec3 V = N;  // Assume view direction equals normal
+                        
+                        for (uint32_t i = 0; i < sampleCount; ++i) {
+                            glm::vec2 Xi = Hammersley(i, sampleCount);
+                            glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
+                            glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+                            
+                            float NdotL = glm::max(glm::dot(N, L), 0.0f);
+                            if (NdotL > 0.0f) {
+                                // Sample with mip level based on PDF and solid angle
+                                float D = DistributionGGX(N, H, roughness);
+                                float NdotH = glm::max(glm::dot(N, H), 0.0f);
+                                float HdotV = glm::max(glm::dot(H, V), 0.0f);
+                                float pdf = D * NdotH / (4.0f * HdotV) + 0.0001f;
+                                
+                                // Calculate sample solid angle and mip level
+                                float saTexel = 4.0f * glm::pi<float>() / (6.0f * prefilterSize * prefilterSize);
+                                float saSample = 1.0f / (float(sampleCount) * pdf + 0.0001f);
+                                float mipLevel = roughness == 0.0f ? 0.0f : 0.5f * log2(saSample / saTexel);
+                                
+                                glm::vec3 sampleColor = sampleCubemapDirection(L);
+                                prefilteredColor += sampleColor * NdotL;
+                                totalWeight += NdotL;
+                            }
+                        }
+                        
+                        if (totalWeight > 0.0f) {
+                            prefilteredColor /= totalWeight;
+                        }
+                    }
+                    
+                    uint32_t idx = (y * mipSize + x) * 4;
+                    faceData[idx + 0] = prefilteredColor.r;
+                    faceData[idx + 1] = prefilteredColor.g;
+                    faceData[idx + 2] = prefilteredColor.b;
+                    faceData[idx + 3] = 1.0f;
+                }
+            }
+            
+            memcpy(data, faceData.data(), bufferSize);
+            copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, prefilterImage,
+                            mipSize, mipSize, face, mip);
+        }
+        
+        vkUnmapMemory(device, stagingBufferMemory);
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+    
+    // Transition to shader read
+    transitionImageLayout(device, commandPool, graphicsQueue, prefilterImage, format,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        0, 6, 0, mipLevels);
+    
+    auto texture = std::make_shared<Texture>(device, physicalDevice);
+    texture->initWithExistingImage(prefilterImage, prefilterMemory, format, prefilterSize, prefilterSize, 
+                                 mipLevels, 6, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    
+    std::cout << "Prefiltered environment map created successfully" << std::endl;
+    return texture;
+}
+
+
+// Replace the createBRDFLookUpTexture function with this complete implementation:
+
+std::shared_ptr<Texture> TextureUtils::createBRDFLookUpTexture(
+    VkDevice device, 
+    VkPhysicalDevice physicalDevice,
+    VkCommandPool commandPool,
+    VkQueue graphicsQueue,
+    uint32_t resolution)  // 0 means use config
+{
+    // Use provided resolution or fall back to configuration
+    if (resolution == 0) {
+        resolution = iblConfig.brdfLutResolution;
+    }
+    
+    // Optional: Still apply a maximum cap for safety
+    const uint32_t maxResolution = 2048;  // Increased from 256
+    resolution = std::min(resolution, maxResolution);
+    
+    std::cout << "Generating BRDF LUT (" << resolution << "x" << resolution << ")..." << std::endl;
+    
+    std::vector<float> lutData(resolution * resolution * 4);
+    const uint32_t SAMPLE_COUNT = iblConfig.brdfLutSamples;  // Changed from hardcoded 256
+    
+    std::cout << "  Using " << SAMPLE_COUNT << " samples for BRDF integration" << std::endl;
+    
+    #pragma omp parallel for collapse(2)
+    for (uint32_t y = 0; y < resolution; y++) {
+        for (uint32_t x = 0; x < resolution; x++) {
+            float NdotV = std::max(float(x) / float(resolution - 1), 0.001f);
+            float roughness = float(y) / float(resolution - 1);
+            
+            glm::vec3 V;
+            V.x = std::sqrt(1.0f - NdotV * NdotV);
+            V.y = 0.0f;
+            V.z = NdotV;
+            
+            float A = 0.0f;
+            float B = 0.0f;
+            
+            glm::vec3 N(0.0f, 0.0f, 1.0f);
+            
+            for (uint32_t i = 0; i < SAMPLE_COUNT; ++i) {
+                glm::vec2 Xi = Hammersley(i, SAMPLE_COUNT);
+                glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
+                glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+                
+                float NdotL = std::max(L.z, 0.0f);
+                float NdotH = std::max(H.z, 0.0f);
+                float VdotH = std::max(glm::dot(V, H), 0.0f);
+                
+                if (NdotL > 0.0f) {
+                    float G = GeometrySmith_IBL(N, V, L, roughness);
+                    float G_Vis = (G * VdotH) / (NdotH * NdotV);
+                    float Fc = pow(1.0f - VdotH, 5.0f);
+                    
+                    A += (1.0f - Fc) * G_Vis;
+                    B += Fc * G_Vis;
+                }
+            }
+            
+            A /= float(SAMPLE_COUNT);
+            B /= float(SAMPLE_COUNT);
+            
+            uint32_t idx = (y * resolution + x) * 4;
+            lutData[idx + 0] = A;
+            lutData[idx + 1] = B;
+            lutData[idx + 2] = 0.0f;
+            lutData[idx + 3] = 1.0f;
+        }
+    }
+    
+    // Convert to unsigned char for texture creation
+    std::vector<unsigned char> pixelData(resolution * resolution * 4);
+    for (size_t i = 0; i < lutData.size(); i++) {
+        pixelData[i] = static_cast<unsigned char>(std::min(lutData[i] * 255.0f, 255.0f));
+    }
+    
+    auto texture = std::make_shared<Texture>(device, physicalDevice);
+    texture->createFromPixels(pixelData.data(), resolution, resolution, 4, commandPool, graphicsQueue);
+    
+    std::cout << "BRDF LUT created successfully" << std::endl;
+    return texture;
+}
+
 std::shared_ptr<Texture> TextureUtils::createDefaultNormalMap(
     VkDevice device, 
     VkPhysicalDevice physicalDevice,
@@ -22,7 +752,7 @@ std::shared_ptr<Texture> TextureUtils::createDefaultNormalMap(
     texture->createFromPixels(normalPixel, 1, 1, 4, commandPool, graphicsQueue);
     
     return texture;
-}
+} 
 
 std::shared_ptr<Texture> TextureUtils::createDefaultMetallicRoughnessMap(
     VkDevice device, 
@@ -168,154 +898,42 @@ std::shared_ptr<Texture> TextureUtils::createCubemap(
     return texture;
 }
 
-// Create a BRDF Look-Up Texture (LUT) for Image-Based Lighting
-// Create a proper BRDF Look-Up Texture (LUT) for PBR
 
-std::shared_ptr<Texture> TextureUtils::createBRDFLookUpTexture(
-    VkDevice device, 
-    VkPhysicalDevice physicalDevice,
-    VkCommandPool commandPool,
-    VkQueue graphicsQueue,
-    uint32_t resolution)
-{
-    // Create a 2D texture for the BRDF LUT
-    VkImage brdfImage;
-    VkDeviceMemory brdfMemory;
-    VkFormat format = VK_FORMAT_R16G16_SFLOAT; // RG16F is sufficient for BRDF LUT
-    
-    // Create image
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.extent.width = resolution;
-    imageInfo.extent.height = resolution;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.format = format;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.flags = 0;
-    
-    if (vkCreateImage(device, &imageInfo, nullptr, &brdfImage) != VK_SUCCESS) {
-        std::cerr << "Failed to create BRDF LUT image!" << std::endl;
-        return nullptr;
-    }
-    
-    // Allocate memory for the BRDF LUT
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(device, brdfImage, &memRequirements);
-    
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, 
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &brdfMemory) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate BRDF LUT memory!" << std::endl;
-        vkDestroyImage(device, brdfImage, nullptr);
-        return nullptr;
-    }
-    
-    vkBindImageMemory(device, brdfImage, brdfMemory, 0);
-    
-    // Create staging buffer for the BRDF LUT data
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    VkDeviceSize bufferSize = resolution * resolution * 2 * sizeof(float); // RG16F
-    
-    createBuffer(device, physicalDevice, bufferSize, 
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                stagingBuffer, stagingBufferMemory);
-    
-    // Map memory for staging buffer
-    void* data;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-    
-    // Calculate the BRDF LUT
-    std::vector<float> lutData(resolution * resolution * 2);
-    
-    // Pre-integrate BRDF for all combinations of NoV and roughness
-    for (uint32_t y = 0; y < resolution; y++) {
-        float roughness = y / static_cast<float>(resolution - 1);
-        roughness = std::max(roughness, 0.01f); // Avoid 0 roughness
-        
-        for (uint32_t x = 0; x < resolution; x++) {
-            float NoV = x / static_cast<float>(resolution - 1);
-            NoV = std::max(NoV, 0.01f); // Avoid 0 NoV
-            
-            glm::vec2 brdf = integrateBRDF(NoV, roughness);
-            
-            uint32_t idx = (y * resolution + x) * 2;
-            lutData[idx + 0] = brdf.x; // Scale factor
-            lutData[idx + 1] = brdf.y; // Bias
-        }
-    }
-    
-    // Copy LUT data to staging buffer
-    memcpy(data, lutData.data(), bufferSize);
-    
-    // Transition layout for copy
-    transitionImageLayout(device, commandPool, graphicsQueue, brdfImage, format,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        0, 1, 0, 1);
-    
-    // Copy buffer to image
-    copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, brdfImage,
-                    resolution, resolution, 0);
-    
-    // Transition to shader read optimal
-    transitionImageLayout(device, commandPool, graphicsQueue, brdfImage, format,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        0, 1, 0, 1);
-    
-    // Clean up staging resources
-    vkUnmapMemory(device, stagingBufferMemory);
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
-    
-    // Create texture object to wrap the BRDF LUT
-    auto texture = std::make_shared<Texture>(device, physicalDevice);
-    texture->initWithExistingImage(brdfImage, brdfMemory, format, resolution, resolution, 
-                                 1, 1, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    
-    std::cout << "Created BRDF Look-Up Texture" << std::endl;
-    return texture;
-}
 
 
 // Load or generate a cubemap for IBL
+// In TextureUtils.cpp, fix the createEnvironmentCubemap function
+// Replace the transition at the end with proper mip level transitions:
+
 std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
     VkCommandPool commandPool,
     VkQueue graphicsQueue,
-    const std::string& hdrFilePath)
+    const std::string& hdrFilePath,
+    const IBLConfig* customConfig)  // Added parameter
 {
+    // Use custom config if provided, otherwise use global config
+    const IBLConfig& config = customConfig ? *customConfig : iblConfig;
+    
     // Load HDR image
     int width, height, channels;
     float* hdrData = stbi_loadf(hdrFilePath.c_str(), &width, &height, &channels, 0);
     if (!hdrData) {
         std::cerr << "Failed to load HDR image: " << hdrFilePath << std::endl;
-        // Create a fallback cubemap
         return createDefaultEnvironmentCubemap(device, physicalDevice, commandPool, graphicsQueue);
     }
     
-    // Create a cubemap from the equirectangular HDR image
-    const uint32_t cubemapSize = 1024; // Size of each cubemap face
+    // Use configuration value instead of hardcoded
+    const uint32_t cubemapSize = config.environmentMapSize;  // Changed from hardcoded 1024
     const uint32_t numMipLevels = static_cast<uint32_t>(std::floor(std::log2(cubemapSize))) + 1;
     
+    std::cout << "Creating environment cubemap with size: " << cubemapSize << "x" << cubemapSize << std::endl;
     // Create cubemap image
     VkImage cubemapImage;
     VkDeviceMemory cubemapMemory;
-    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; // HDR requires floating point
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
     
-    // Create image
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -323,14 +941,14 @@ std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
     imageInfo.extent.height = cubemapSize;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = numMipLevels;
-    imageInfo.arrayLayers = 6; // Cubemap has 6 faces
+    imageInfo.arrayLayers = 6;
     imageInfo.format = format;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT; // Important for cubemaps
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     
     if (vkCreateImage(device, &imageInfo, nullptr, &cubemapImage) != VK_SUCCESS) {
         std::cerr << "Failed to create cubemap image!" << std::endl;
@@ -338,7 +956,7 @@ std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
         return createDefaultEnvironmentCubemap(device, physicalDevice, commandPool, graphicsQueue);
     }
     
-    // Allocate memory for the cubemap
+    // Allocate memory
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(device, cubemapImage, &memRequirements);
     
@@ -357,60 +975,200 @@ std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
     
     vkBindImageMemory(device, cubemapImage, cubemapMemory, 0);
     
-    // TODO: Use a compute shader to convert equirectangular HDR to cubemap
-    // For this implementation, we'll convert on the CPU for simplicity
-    // Generate cubemap face data
-    
-    // Create staging buffer for each face
+    // Create staging buffer
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
-    VkDeviceSize bufferSize = cubemapSize * cubemapSize * 4 * sizeof(float); // RGBA32F
+    VkDeviceSize bufferSize = cubemapSize * cubemapSize * 4 * sizeof(float);
     
     createBuffer(device, physicalDevice, bufferSize, 
                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                stagingBuffer, stagingBufferMemory);
     
-    // Map memory for staging buffer
     void* data;
     vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
     
-    // Convert equirectangular HDR to cubemap faces
-    // This is a simplified conversion - a real implementation would use more accurate sampling
     std::vector<float> faceData(cubemapSize * cubemapSize * 4);
     
-    // For each face of the cubemap
+    // Transition ALL mip levels for ALL faces to TRANSFER_DST_OPTIMAL first
+    {
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool = commandPool;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = cubemapImage;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = numMipLevels;  // ALL mip levels
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;  // ALL faces
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier
+        );
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
+    
+    // Copy face data to each face (mip level 0 only)
     for (uint32_t face = 0; face < 6; face++) {
         equirectangularToCubemapFace(hdrData, width, height, channels, 
                                     faceData.data(), cubemapSize, face);
         
-        // Copy face data to staging buffer
         memcpy(data, faceData.data(), bufferSize);
         
-        // Transition layout for copy
-        transitionImageLayout(device, commandPool, graphicsQueue, cubemapImage, format,
-                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            face, 1, 0, 1);
-        
-        // Copy buffer to image
+        // Copy buffer to image (mip level 0 only)
         copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, cubemapImage,
-                        cubemapSize, cubemapSize, face);
+                        cubemapSize, cubemapSize, face, 0);
     }
     
-    // Transition to shader read optimal
-    transitionImageLayout(device, commandPool, graphicsQueue, cubemapImage, format,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        0, 6, 0, 1);
+    // Generate mipmaps (this will also transition to SHADER_READ_ONLY_OPTIMAL)
+    {
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool = commandPool;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.image = cubemapImage;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.layerCount = 6;  // Process all faces
+
+        int32_t mipWidth = cubemapSize;
+        int32_t mipHeight = cubemapSize;
+
+        for (uint32_t i = 1; i < numMipLevels; i++) {
+            barrier.subresourceRange.baseMipLevel = i - 1;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier);
+
+            // Blit from previous mip level
+            for (uint32_t face = 0; face < 6; face++) {
+                VkImageBlit blit{};
+                blit.srcOffsets[0] = {0, 0, 0};
+                blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.mipLevel = i - 1;
+                blit.srcSubresource.baseArrayLayer = face;
+                blit.srcSubresource.layerCount = 1;
+                blit.dstOffsets[0] = {0, 0, 0};
+                blit.dstOffsets[1] = {mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1};
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.mipLevel = i;
+                blit.dstSubresource.baseArrayLayer = face;
+                blit.dstSubresource.layerCount = 1;
+
+                vkCmdBlitImage(commandBuffer,
+                    cubemapImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    cubemapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &blit,
+                    VK_FILTER_LINEAR);
+            }
+
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier);
+
+            if (mipWidth > 1) mipWidth /= 2;
+            if (mipHeight > 1) mipHeight /= 2;
+        }
+
+        // Transition the last mip level
+        barrier.subresourceRange.baseMipLevel = numMipLevels - 1;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
     
-    // Clean up staging resources
+    // Clean up
     vkUnmapMemory(device, stagingBufferMemory);
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
     stbi_image_free(hdrData);
     
-    // Create texture object to wrap the cubemap
+    // Create texture object
     auto texture = std::make_shared<Texture>(device, physicalDevice);
-    // Initialize the texture with the cubemap image
     texture->initWithExistingImage(cubemapImage, cubemapMemory, format, cubemapSize, cubemapSize, 
                                  numMipLevels, 6, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     
@@ -422,25 +1180,32 @@ std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
 // Generate irradiance cubemap from environment map for diffuse IBL
 // Generate irradiance cubemap from environment map for diffuse IBL
 
+
 std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
     VkCommandPool commandPool,
     VkQueue graphicsQueue,
-    std::shared_ptr<Texture> environmentMap)
+    std::shared_ptr<Texture> environmentMap,
+    const IBLConfig* customConfig)  // Added parameter
 {
     if (!environmentMap) {
         std::cerr << "No environment map provided for irradiance generation" << std::endl;
         return nullptr;
     }
     
-    // For irradiance map, we use a smaller resolution since it's a low-frequency signal
-    const uint32_t irradianceSize = 64;
+    // Use custom config if provided, otherwise use global config
+    const IBLConfig& config = customConfig ? *customConfig : iblConfig;
+    
+    // Use configuration value instead of hardcoded
+    const uint32_t irradianceSize = config.irradianceMapSize;  // Changed from hardcoded 64
+    
+    std::cout << "Creating irradiance map with size: " << irradianceSize << "x" << irradianceSize << std::endl;
     
     // Create a new cubemap texture for the irradiance map
     VkImage irradianceImage;
     VkDeviceMemory irradianceMemory;
-    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; // HDR requires floating point
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; 
     
     // Create image
     VkImageCreateInfo imageInfo{};
@@ -570,214 +1335,104 @@ std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
 }
 
 
-// Generate prefiltered environment map for specular IBL
-// Generate prefiltered environment map for specular IBL
 
-std::shared_ptr<Texture> TextureUtils::createPrefilterMap(
-    VkDevice device,
-    VkPhysicalDevice physicalDevice,
-    VkCommandPool commandPool,
-    VkQueue graphicsQueue,
-    std::shared_ptr<Texture> environmentMap)
-{
-    if (!environmentMap) {
-        std::cerr << "No environment map provided for prefilter generation" << std::endl;
-        return nullptr;
-    }
-    
-    // For prefiltered environment map, we use multiple mip levels for different roughness values
-    const uint32_t prefilterSize = 256;
-    const uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(prefilterSize))) + 1;
-    
-    // Create a new cubemap texture for the prefiltered environment map
-    VkImage prefilterImage;
-    VkDeviceMemory prefilterMemory;
-    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; // HDR requires floating point
-    
-    // Create image
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.extent.width = prefilterSize;
-    imageInfo.extent.height = prefilterSize;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = mipLevels;
-    imageInfo.arrayLayers = 6; // Cubemap has 6 faces
-    imageInfo.format = format;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    
-    if (vkCreateImage(device, &imageInfo, nullptr, &prefilterImage) != VK_SUCCESS) {
-        std::cerr << "Failed to create prefilter map image!" << std::endl;
-        return nullptr;
-    }
-    
-    // Allocate memory for the prefilter map
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(device, prefilterImage, &memRequirements);
-    
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, 
-                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &prefilterMemory) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate prefilter map memory!" << std::endl;
-        vkDestroyImage(device, prefilterImage, nullptr);
-        return nullptr;
-    }
-    
-    vkBindImageMemory(device, prefilterImage, prefilterMemory, 0);
-    
-    // Process each mip level with increasing roughness
-    for (uint32_t mip = 0; mip < mipLevels; mip++) {
-        // Calculate size of this mip level
-        uint32_t mipSize = prefilterSize >> mip;
-        if (mipSize < 1) mipSize = 1;
-        
-        // Roughness increases with each mip level
-        float roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
-        
-        // Create staging buffer for this mip level
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        VkDeviceSize bufferSize = mipSize * mipSize * 4 * sizeof(float); // RGBA32F
-        
-        createBuffer(device, physicalDevice, bufferSize, 
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    stagingBuffer, stagingBufferMemory);
-        
-        // Map memory for staging buffer
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        
-        // For each face of the cubemap
-        for (uint32_t face = 0; face < 6; face++) {
-            // Create data for this face
-            std::vector<float> faceData(mipSize * mipSize * 4);
-            
-            // Perform importance sampling for each pixel
-            for (uint32_t y = 0; y < mipSize; y++) {
-                for (uint32_t x = 0; x < mipSize; x++) {
-                    // Get direction vector for this pixel
-                    float u = (2.0f * x / (mipSize - 1.0f)) - 1.0f;
-                    float v = (2.0f * y / (mipSize - 1.0f)) - 1.0f;
-                    
-                    glm::vec3 direction;
-                    switch (face) {
-                        case 0: direction = glm::normalize(glm::vec3(1.0f, -v, -u)); break;  // +X
-                        case 1: direction = glm::normalize(glm::vec3(-1.0f, -v, u)); break;  // -X
-                        case 2: direction = glm::normalize(glm::vec3(u, 1.0f, v)); break;    // +Y
-                        case 3: direction = glm::normalize(glm::vec3(u, -1.0f, -v)); break;  // -Y
-                        case 4: direction = glm::normalize(glm::vec3(u, -v, 1.0f)); break;   // +Z
-                        case 5: direction = glm::normalize(glm::vec3(-u, -v, -1.0f)); break; // -Z
-                    }
-                    
-                    // Perform a simplified specular convolution based on roughness
-                    glm::vec3 filteredColor = specularConvolution(environmentMap, direction, roughness, 1024);
-                    
-                    // Set pixel data
-                    uint32_t idx = (y * mipSize + x) * 4;
-                    faceData[idx + 0] = filteredColor.r;
-                    faceData[idx + 1] = filteredColor.g;
-                    faceData[idx + 2] = filteredColor.b;
-                    faceData[idx + 3] = 1.0f;
-                }
-            }
-            
-            // Copy face data to staging buffer
-            memcpy(data, faceData.data(), bufferSize);
-            
-            // Transition layout for copy
-            transitionImageLayout(device, commandPool, graphicsQueue, prefilterImage, format,
-                                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                face, 1, mip, 1);
-            
-            // Copy buffer to image
-            copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, prefilterImage,
-                            mipSize, mipSize, face, mip);
-        }
-        
-        // Clean up staging resources for this mip level
-        vkUnmapMemory(device, stagingBufferMemory);
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-    }
-    
-    // Transition all mip levels to shader read optimal
-    transitionImageLayout(device, commandPool, graphicsQueue, prefilterImage, format,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        0, 6, 0, mipLevels);
-    
-    // Create texture object to wrap the prefilter map
-    auto texture = std::make_shared<Texture>(device, physicalDevice);
-    texture->initWithExistingImage(prefilterImage, prefilterMemory, format, prefilterSize, prefilterSize, 
-                                 mipLevels, 6, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    
-    std::cout << "Created prefiltered environment map with " << mipLevels << " mip levels" << std::endl;
-    return texture;
-}
+
+
 
 // Helper function to convert equirectangular projection to a cubemap face
+// In TextureUtils.cpp - Replace the equirectangularToCubemapFace function
+
 void TextureUtils::equirectangularToCubemapFace(
     float* equirectangularData, int equiWidth, int equiHeight, int channels,
     float* faceData, int faceSize, int faceIndex)
 {
-    // Direction vectors for each face of the cubemap
-    // 0: +X (right), 1: -X (left), 2: +Y (up), 3: -Y (down), 4: +Z (front), 5: -Z (back)
-    glm::vec3 faceDirs[6][3] = {
-        { glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f) }, // +X
-        { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f) }, // -X
-        { glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f) },   // +Y
-        { glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f) }, // -Y
-        { glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f) },  // +Z
-        { glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f) } // -Z
-    };
-    
-    glm::vec3 facePlane = faceDirs[faceIndex][0];
-    glm::vec3 faceU = faceDirs[faceIndex][2];
-    glm::vec3 faceV = faceDirs[faceIndex][1];
-    
+    // For each pixel in the cubemap face
     for (int y = 0; y < faceSize; y++) {
         for (int x = 0; x < faceSize; x++) {
-            // Map pixel position to [-1, 1] range
-            float u = (2.0f * x / (faceSize - 1.0f)) - 1.0f;
-            float v = (2.0f * y / (faceSize - 1.0f)) - 1.0f;
+            // Convert pixel coordinates to [-1, 1] range
+            float u = 2.0f * (x + 0.5f) / faceSize - 1.0f;
+            float v = 2.0f * (y + 0.5f) / faceSize - 1.0f;
             
-            // Get direction vector for this pixel
-            glm::vec3 dir = glm::normalize(facePlane + (u * faceU) + (v * faceV));
+            // Calculate the 3D direction vector for this pixel on the cube face
+            glm::vec3 dir;
             
-            // Convert direction to equirectangular coordinates
-            float phi = std::atan2(dir.z, dir.x);
-            float theta = std::asin(dir.y);
+            switch (faceIndex) {
+                case 0: // +X (Right)
+                    dir = glm::vec3(1.0f, -v, -u);
+                    break;
+                case 1: // -X (Left)  
+                    dir = glm::vec3(-1.0f, -v, u);
+                    break;
+                case 2: // +Y (Top)
+                    dir = glm::vec3(u, 1.0f, v);
+                    break;
+                case 3: // -Y (Bottom)
+                    dir = glm::vec3(u, -1.0f, -v);
+                    break;
+                case 4: // +Z (Front)
+                    dir = glm::vec3(u, -v, 1.0f);
+                    break;
+                case 5: // -Z (Back)
+                    dir = glm::vec3(-u, -v, -1.0f);
+                    break;
+            }
             
-            // Map to [0, 1] range
-            float eqU = (phi + glm::pi<float>()) / (2.0f * glm::pi<float>());
-            float eqV = (theta + glm::pi<float>() / 2.0f) / glm::pi<float>();
+            // Normalize the direction vector
+            dir = glm::normalize(dir);
             
-            // Sample from equirectangular map
-            int eqX = static_cast<int>(eqU * (equiWidth - 1) + 0.5f);
-            int eqY = static_cast<int>(eqV * (equiHeight - 1) + 0.5f);
+            // Convert the 3D direction to spherical coordinates
+            // Theta (azimuthal angle): angle from +X axis in XZ plane
+            float theta = std::atan2(dir.z, dir.x);
+            // Phi (polar angle): angle from +Y axis
+            float phi = std::acos(glm::clamp(dir.y, -1.0f, 1.0f));
             
-            // Clamp to valid range
-            eqX = std::max(0, std::min(eqX, equiWidth - 1));
-            eqY = std::max(0, std::min(eqY, equiHeight - 1));
+            // Convert spherical coordinates to equirectangular UV coordinates
+            float eqU = (theta + glm::pi<float>()) / (2.0f * glm::pi<float>());
+            float eqV = phi / glm::pi<float>();
             
-            // Get pixel from equirectangular image
-            int eqIdx = (eqY * equiWidth + eqX) * channels;
+            // Wrap UV coordinates
+            eqU = glm::fract(eqU);
+            eqV = glm::clamp(eqV, 0.0f, 1.0f);
             
-            // Set face pixel data
+            // Sample from the equirectangular image using bilinear interpolation
+            float fX = eqU * (equiWidth - 1);
+            float fY = eqV * (equiHeight - 1);
+            
+            int x0 = (int)std::floor(fX);
+            int y0 = (int)std::floor(fY);
+            int x1 = std::min(x0 + 1, equiWidth - 1);
+            int y1 = std::min(y0 + 1, equiHeight - 1);
+            
+            float dx = fX - x0;
+            float dy = fY - y0;
+            
+            // Ensure x coordinates wrap around
+            x0 = x0 % equiWidth;
+            x1 = x1 % equiWidth;
+            
+            // Bilinear interpolation
             int faceIdx = (y * faceSize + x) * 4;
-            faceData[faceIdx + 0] = equirectangularData[eqIdx + 0]; // R
-            faceData[faceIdx + 1] = channels > 1 ? equirectangularData[eqIdx + 1] : equirectangularData[eqIdx + 0]; // G
-            faceData[faceIdx + 2] = channels > 2 ? equirectangularData[eqIdx + 2] : equirectangularData[eqIdx + 0]; // B
-            faceData[faceIdx + 3] = 1.0f; // A
+            
+            for (int c = 0; c < std::min(channels, 3); c++) {
+                float v00 = equirectangularData[(y0 * equiWidth + x0) * channels + c];
+                float v10 = equirectangularData[(y0 * equiWidth + x1) * channels + c];
+                float v01 = equirectangularData[(y1 * equiWidth + x0) * channels + c];
+                float v11 = equirectangularData[(y1 * equiWidth + x1) * channels + c];
+                
+                float v0 = v00 * (1.0f - dx) + v10 * dx;
+                float v1 = v01 * (1.0f - dx) + v11 * dx;
+                float value = v0 * (1.0f - dy) + v1 * dy;
+                
+                faceData[faceIdx + c] = value;
+            }
+            
+            // Fill remaining channels if needed
+            for (int c = channels; c < 3; c++) {
+                faceData[faceIdx + c] = faceData[faceIdx]; // Use R channel
+            }
+            
+            // Set alpha to 1.0
+            faceData[faceIdx + 3] = 1.0f;
         }
     }
 }

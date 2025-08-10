@@ -37,6 +37,8 @@ void Scene::createMeshesFromData(const std::vector<MeshData>& meshDataList,
     createMeshesFromData(meshDataList, transform, defaultMaterial);
 }
 
+// In Scene.cpp, modify loadTexturedModel to add better error checking:
+
 bool Scene::loadTexturedModel(const std::string& modelFilename, const std::string& textureFilename, 
                              const Transform& transform) {
     if (!modelLoader.LoadModel(modelFilename)) {
@@ -50,24 +52,54 @@ bool Scene::loadTexturedModel(const std::string& modelFilename, const std::strin
         return false;
     }
     
-    // Load texture
-    std::shared_ptr<Texture> texture = loadTexture(textureFilename);
-    if (!texture) {
-        std::cerr << "Failed to load texture: " << textureFilename << std::endl;
-        // Continue without texture
-        createMeshesFromData(meshDataList, transform);
-        return true;
-    }
-    
-    // Create material with texture
+    // Create material first
     auto myMaterial = std::make_shared<Material>();
-    myMaterial->setTexture(TextureType::Diffuse, texture);
-    // Create meshes with the material
+    
+    // Load texture if filename provided
+    std::shared_ptr<Texture> texture = nullptr;
+if (!textureFilename.empty()) {
+    std::cout << "Loading texture: " << textureFilename << std::endl;
+    
+    // Check if file exists
+    if (!std::filesystem::exists(textureFilename)) {
+        std::cerr << "ERROR: Texture file does not exist: " << textureFilename << std::endl;
+    } else {
+        texture = loadTexture(textureFilename);
+        if (!texture) {
+            std::cerr << "Failed to load texture: " << textureFilename << std::endl;
+            std::cerr << "Using default white texture instead." << std::endl;
+        } else {
+            std::cout << "Texture loaded successfully: " << textureFilename << std::endl;
+            
+            // IMPORTANT: Set the texture on the material
+            myMaterial->setTexture(TextureType::Diffuse, texture);
+            std::cout << "Texture set on material as Diffuse map" << std::endl;
+        }
+    }
+}
+    
+    // Set default material properties
+    myMaterial->diffuseColor = glm::vec3(1.0f, 1.0f, 1.0f); // White base color
+    myMaterial->metallic = 0.0f;  // Non-metallic
+    myMaterial->roughness = 0.8f; // Slightly rough
+    myMaterial->alpha = 1.0f;     // Fully opaque
+    
+    // Create descriptor set for the material
     VkDescriptorSet materialDescriptorSet = renderer->createMaterialDescriptorSet(*myMaterial);
+    if (materialDescriptorSet == VK_NULL_HANDLE) {
+        std::cerr << "Failed to create material descriptor set!" << std::endl;
+        return false;
+    }
     myMaterial->setDescriptorSet(materialDescriptorSet);
+    std::cout << "Material descriptor set created and assigned" << std::endl;
+    
+    // Create meshes with the material
     createMeshesFromData(meshDataList, transform, myMaterial);
+    
+    std::cout << "Model loaded with " << meshDataList.size() << " mesh(es)" << std::endl;
     return true;
 }
+
 
 bool Scene::loadTexturedModelPBR(const std::string& modelFilename, 
                                const MaterialTexturePaths& texturePaths,
@@ -226,8 +258,8 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
     renderer->updateViewProjection(view, proj);
     
     // Check which pipeline to use
-    bool usePBR = renderer->getRenderMode() == VulkanRenderer::RenderMode::PBR || 
-                 renderer->getRenderMode() == VulkanRenderer::RenderMode::PBR_IBL;
+    bool usePBR = renderer->getRenderMode() == RenderMode::PBR || 
+                 renderer->getRenderMode() == RenderMode::PBR_IBL;
     
     // Bind the appropriate pipeline
     if (usePBR) {
@@ -337,6 +369,9 @@ void Scene::draw(VkCommandBuffer commandBuffer, const glm::mat4& view, const glm
         instance.mesh->draw(commandBuffer);
     }
 }
+
+
+
 void Scene::addLight(const glm::vec3& position, const glm::vec3& color, 
                     float intensity, float radius, float falloff, bool isDirectional) {
     Light light;
@@ -364,38 +399,40 @@ void Scene::removeLight(size_t index) {
 
 
 
+// In Scene::setupDefaultLighting(), reduce light intensities:
+
 void Scene::setupDefaultLighting() {
     // Clear any existing lights
     clearLights();
     
-    // Add a main directional light (sun)
+    // Add a main directional light (sun) with REDUCED intensity
     addLight(
         glm::vec3(1.0f, 1.0f, 1.0f),    // Direction (will be normalized)
         glm::vec3(1.0f, 0.95f, 0.9f),   // Slightly warm white color
-        2.0f,                           // Intensity
-        0.0f,                           // Radius (0 for directional lights)
-        1.0f,                           // Falloff (unused for directional)
-        true                            // isDirectional = true
+        1.0f,                            // Reduced intensity (was 2.0f)
+        0.0f,                            // Radius (0 for directional lights)
+        1.0f,                            // Falloff (unused for directional)
+        true                             // isDirectional = true
     );
     
-    // Add a fill light from the opposite direction
+    // Add a fill light from the opposite direction with REDUCED intensity
     addLight(
         glm::vec3(-0.5f, 0.2f, -0.5f),  // Direction
         glm::vec3(0.6f, 0.7f, 1.0f),    // Slightly blue color
-        0.5f,                           // Lower intensity
-        0.0f,                           // Radius
-        1.0f,                           // Falloff
-        true                            // isDirectional
+        0.3f,                            // Lower intensity (was 0.5f)
+        0.0f,                            // Radius
+        1.0f,                            // Falloff
+        true                             // isDirectional
     );
     
-    // Add a point light
+    // Add a point light with REDUCED intensity
     addLight(
         glm::vec3(2.0f, 1.0f, 2.0f),    // Position
         glm::vec3(1.0f, 0.8f, 0.6f),    // Warm color
-        5.0f,                           // Intensity
-        10.0f,                          // Radius
-        2.0f,                           // Falloff
-        false                           // isPoint
+        2.0f,                            // Reduced intensity (was 5.0f)
+        10.0f,                           // Radius
+        2.0f,                            // Falloff
+        false                            // isPoint
     );
 }
 
@@ -489,6 +526,7 @@ Material Scene::createPBRMaterial(
     return material;
 }
 
+// Replace the existing setupEnvironment implementation in Scene.cpp
 bool Scene::setupEnvironment(const std::string& hdriPath) {
     if (!renderer) {
         std::cerr << "Renderer not initialized" << std::endl;
@@ -497,8 +535,18 @@ bool Scene::setupEnvironment(const std::string& hdriPath) {
     
     // Set up IBL with the given HDRI environment map
     try {
-        //renderer->setupIBL(hdriPath);
-        return true;
+        bool success = renderer->setupIBL(hdriPath);
+        
+        if (success) {
+            std::cout << "Environment setup successful with HDRI: " << hdriPath << std::endl;
+            
+            // Switch to PBR_IBL mode if IBL is successfully set up
+            renderer->setRenderMode(RenderMode::PBR_IBL);
+        } else {
+            std::cerr << "Failed to set up environment with HDRI: " << hdriPath << std::endl;
+        }
+        
+        return success;
     } catch (const std::exception& e) {
         std::cerr << "Failed to set up environment: " << e.what() << std::endl;
         return false;

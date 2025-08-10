@@ -89,6 +89,9 @@ void ModelLoader::ProcessNode(FbxNode* node, int indentLevel) {
         ProcessNode(node->GetChild(i), indentLevel + 1);
     }
 }
+// If the model still appears inside-out after the above fixes,
+// try this alternative ProcessMesh that reverses the winding order:
+
 void ModelLoader::ProcessMesh(FbxMesh* mesh) {
     std::cout << "Starting mesh processing..." << std::endl;
     MeshData meshData;
@@ -109,8 +112,17 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
             continue;
         }
         
-        // Process each vertex of the triangle
-        for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
+        // IMPORTANT: Process vertices in REVERSE order to flip winding
+        // Change this line based on what works:
+        
+        // Option A: Normal order (0, 1, 2)
+        //int vertexOrder[3] = {0, 1, 2};
+        
+        // Option B: Reverse order (2, 1, 0) - uncomment if needed
+         int vertexOrder[3] = {2, 1, 0};
+        
+        for (int i = 0; i < 3; i++) {
+            int vertexIndex = vertexOrder[i];
             Vertex vertex{};
             int controlPointIndex = mesh->GetPolygonVertex(polygonIndex, vertexIndex);
             
@@ -128,36 +140,47 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
                 bool unmapped;
                 mesh->GetPolygonVertexUV(polygonIndex, vertexIndex, mesh->GetElementUV(0)->GetName(), uv, unmapped);
     
-                // Store U coordinate as is
-                float u = static_cast<float>(uv[0]);
-    
-                // Flip the V coordinate for Vulkan
-                float v = 1.0f - static_cast<float>(uv[1]);
-                
-                vertex.texCoord = glm::vec2(u, v);
-    
-                // Debug
-                if (vertices.size() < 10) {
-                    std::cout << "Original UV: (" << uv[0] << ", " << uv[1] << "), "
-                              << "Flipped UV: (" << vertex.texCoord.x << ", " << vertex.texCoord.y << ")" << std::endl;
+                // Check for invalid UV coordinates
+                if (unmapped) {
+                    std::cerr << "Warning: Unmapped UV at polygon " << polygonIndex << ", vertex " << vertexIndex << std::endl;
+                    vertex.texCoord = glm::vec2(0.5f, 0.5f); // Default to center
+                } else {
+                    // Clamp UV coordinates to valid range
+                    float u = static_cast<float>(uv[0]);
+                    float v = static_cast<float>(uv[1]);
+        
+                    // Flip V coordinate for Vulkan and clamp to [0,1]
+                    vertex.texCoord = glm::vec2(
+                        glm::clamp(u, 0.0f, 1.0f),
+                        glm::clamp(1.0f - v, 0.0f, 1.0f)
+                    );
+        
+                    // Debug: Print if UV is outside normal range
+                    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) {
+                        std::cout << "UV out of range: (" << u << ", " << v << ")" << std::endl;
+                    }
                 }
+            } else {
+                std::cerr << "Warning: No UV coordinates found in mesh!" << std::endl;
+                vertex.texCoord = glm::vec2(0.5f, 0.5f);
             }
             
             // Get normal
             if (mesh->GetElementNormal(0)) {
                 FbxVector4 normal;
                 mesh->GetPolygonVertexNormal(polygonIndex, vertexIndex, normal);
-                vertex.normal = glm::vec3(
-                    static_cast<float>(normal[0]),
-                    static_cast<float>(normal[1]),
-                    static_cast<float>(normal[2])
-                );
+    
+                // IMPORTANT: Negate the normal since we reversed the winding order
+                vertex.normal = glm::normalize(glm::vec3(
+                    -static_cast<float>(normal[0]),  // Negate X
+                    -static_cast<float>(normal[1]),  // Negate Y
+                    -static_cast<float>(normal[2])   // Negate Z
+                ));
+            } else {
+                vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
             }
-            
             // Set default color
             vertex.color = glm::vec3(1.0f, 1.0f, 1.0f);
-
-            // Set default tangent (will be calculated later)
             vertex.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
             
             // Add vertex and index
@@ -169,9 +192,10 @@ void ModelLoader::ProcessMesh(FbxMesh* mesh) {
     meshData.vertices = vertices;
     meshData.indices = indices;
     meshes.push_back(meshData);
+    
     std::cout << "Finished processing mesh. Added " 
-          << vertices.size() << " vertices and "
-          << indices.size() << " indices" << std::endl;
+              << vertices.size() << " vertices and "
+              << indices.size() << " indices" << std::endl;
 }
 
 
@@ -258,12 +282,12 @@ MeshData ModelLoader::CreateSphere(float radius, int slices, int stacks) {
     
     // Generate vertices
     for (int stack = 0; stack <= stacks; stack++) {
-        float phi = 3.14159265 * (float)stack / (float)stacks;
+        float phi = 3.14159265359 * (float)stack / (float)stacks;
         float sinPhi = sin(phi);
         float cosPhi = cos(phi);
         
         for (int slice = 0; slice <= slices; slice++) {
-            float theta = 2.0f * 3.14159265 * (float)slice / (float)slices;
+            float theta = 2.0f * 3.14159265359 * (float)slice / (float)slices;
             float sinTheta = sin(theta);
             float cosTheta = cos(theta);
             
@@ -275,17 +299,19 @@ MeshData ModelLoader::CreateSphere(float radius, int slices, int stacks) {
             // Normal (normalized position for a sphere)
             glm::vec3 normal(x, y, z);
             
-            // Tangent and bitangent
-            glm::vec3 tangent(cosTheta * cosPhi, -sinPhi, sinTheta * cosPhi);
-            if (glm::length(tangent) < 0.0001f) {
+            // Calculate tangent properly
+            glm::vec3 tangent;
+            
+            // Special handling for poles
+            if (stack == 0 || stack == stacks) {
+                // At poles, tangent is arbitrary but consistent
                 tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+            } else {
+                // Standard tangent calculation
+                tangent = glm::normalize(glm::vec3(-sinTheta, 0.0f, cosTheta));
             }
-            tangent = glm::normalize(tangent);
             
-            glm::vec3 bitangent = glm::cross(normal, tangent);
-            bitangent = glm::normalize(bitangent);
-            
-            // UV coordinates
+            // UV coordinates - ensure proper wrapping
             float u = (float)slice / (float)slices;
             float v = (float)stack / (float)stacks;
             
@@ -307,10 +333,12 @@ MeshData ModelLoader::CreateSphere(float radius, int slices, int stacks) {
             int p1 = stack * (slices + 1) + slice;
             int p2 = p1 + (slices + 1);
             
+            // First triangle
             meshData.indices.push_back(p1);
             meshData.indices.push_back(p2);
             meshData.indices.push_back(p1 + 1);
             
+            // Second triangle
             meshData.indices.push_back(p1 + 1);
             meshData.indices.push_back(p2);
             meshData.indices.push_back(p2 + 1);
@@ -323,54 +351,24 @@ MeshData ModelLoader::CreateSphere(float radius, int slices, int stacks) {
 MeshData ModelLoader::CreatePlane(float width, float height) {
     MeshData meshData;
     
-    float halfWidth = width / 2.0f;
-    float halfHeight = height / 2.0f;
+    float halfWidth = width * 0.5f;
+    float halfHeight = height * 0.5f;
     
-    // Create 4 vertices for a simple quad
-    Vertex v1, v2, v3, v4;
+    // Define vertices for a plane facing UP (positive Y)
+    // When looking from above, vertices should be counter-clockwise
+    meshData.vertices = {
+        // Position                      Color           Normal (up)      TexCoord    Tangent
+        {{ -halfWidth, 0.0f,  halfHeight}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // Top-left
+        {{  halfWidth, 0.0f,  halfHeight}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // Top-right  
+        {{  halfWidth, 0.0f, -halfHeight}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // Bottom-right
+        {{ -halfWidth, 0.0f, -halfHeight}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}  // Bottom-left
+    };
     
-    // Bottom left
-    v1.position = glm::vec3(-halfWidth, 0.0f, -halfHeight);
-    v1.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-    v1.texCoord = glm::vec2(0.0f, 0.0f);
-    v1.color = glm::vec3(1.0f);
-    v1.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-    
-    // Bottom right
-    v2.position = glm::vec3(halfWidth, 0.0f, -halfHeight);
-    v2.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-    v2.texCoord = glm::vec2(1.0f, 0.0f);
-    v2.color = glm::vec3(1.0f);
-    v2.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-    
-    // Top right
-    v3.position = glm::vec3(halfWidth, 0.0f, halfHeight);
-    v3.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-    v3.texCoord = glm::vec2(1.0f, 1.0f);
-    v3.color = glm::vec3(1.0f);
-    v3.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-    
-    // Top left
-    v4.position = glm::vec3(-halfWidth, 0.0f, halfHeight);
-    v4.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-    v4.texCoord = glm::vec2(0.0f, 1.0f);
-    v4.color = glm::vec3(1.0f);
-    v4.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-    
-    // Add vertices
-    meshData.vertices.push_back(v1);
-    meshData.vertices.push_back(v2);
-    meshData.vertices.push_back(v3);
-    meshData.vertices.push_back(v4);
-    
-    // Add indices for two triangles
-    meshData.indices.push_back(0);
-    meshData.indices.push_back(1);
-    meshData.indices.push_back(2);
-    
-    meshData.indices.push_back(2);
-    meshData.indices.push_back(3);
-    meshData.indices.push_back(0);
+    // Indices for two triangles, counter-clockwise when viewed from above
+    meshData.indices = {
+        0, 1, 2,  // First triangle (counter-clockwise from above)
+        0, 2, 3   // Second triangle (counter-clockwise from above)
+    };
     
     return meshData;
 }

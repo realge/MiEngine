@@ -8,6 +8,10 @@ public:
     Texture(VkDevice device, VkPhysicalDevice physicalDevice);
     ~Texture();
 
+    VkImage getImage() const { return textureImage; }
+    VkFormat getFormat() const { return imageFormat; }
+    uint32_t getMipLevels() const { return mipLevels; }
+    
     // Load texture from a file (use stb_image internally)
     bool loadFromFile(const std::string& filepath, VkCommandPool commandPool, VkQueue graphicsQueue);
     

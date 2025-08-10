@@ -53,6 +53,26 @@ bool IBLSystem::initialize(const std::string& hdriPath) {
             return false;
         }
     }
+
+    if (environmentMap) {
+        // Read and cache the environment map data
+        std::cout << "Reading environment map data from GPU..." << std::endl;
+        auto envData = TextureUtils::readCubemapFromGPU(
+            renderer->getDevice(),
+            renderer->getPhysicalDevice(),
+            renderer->getCommandPool(),
+            renderer->getGraphicsQueue(),
+            environmentMap
+        );
+        
+        if (envData) {
+            TextureUtils::cacheEnvironmentMap(environmentMap, envData);
+            TextureUtils::setCurrentEnvironmentData(envData);
+            std::cout << "Environment map data cached for CPU sampling" << std::endl;
+        } else {
+            std::cerr << "Warning: Failed to cache environment map data" << std::endl;
+        }
+    }
     
     // Create other IBL resources
     bool success = createIBLResources();
@@ -83,10 +103,34 @@ bool IBLSystem::initialize(const std::string& hdriPath) {
     return true;
 }
 
+
+
 bool IBLSystem::createIBLResources() {
     if (!environmentMap) {
         std::cerr << "Environment map not loaded" << std::endl;
         return false;
+    }
+
+
+
+    if (environmentMap) {
+        // Read and cache the environment map data
+        std::cout << "Reading environment map data from GPU..." << std::endl;
+        auto envData = TextureUtils::readCubemapFromGPU(
+            renderer->getDevice(),
+            renderer->getPhysicalDevice(),
+            renderer->getCommandPool(),
+            renderer->getGraphicsQueue(),
+            environmentMap
+        );
+        
+        if (envData) {
+            TextureUtils::cacheEnvironmentMap(environmentMap, envData);
+            TextureUtils::setCurrentEnvironmentData(envData);
+            std::cout << "Environment map data cached for CPU sampling" << std::endl;
+        } else {
+            std::cerr << "Warning: Failed to cache environment map data" << std::endl;
+        }
     }
     
     VkDevice device = renderer->getDevice();

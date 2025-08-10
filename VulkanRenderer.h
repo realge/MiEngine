@@ -17,10 +17,25 @@
 #include "../include/Utils/CommonVertex.h"
 #include "include/texture/Texture.h"
 #include <set>
+#include "C:\Users\13667\imgui\imgui.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 #include "include/Utils/TextureUtils.h"
 #include "include/scene/Scene.h"
+#include "include/camera/Camera.h"
 
+#include <memory>
+
+#include "include/debug/DebugUIManager.h"
+#include "include/Renderer/IBLSystem.h"
 class IBLSystem;
+
+enum class RenderMode {
+    Standard,
+    PBR,
+    PBR_IBL
+};
 
 
 
@@ -46,6 +61,12 @@ struct PushConstant {//push constant for pbr
     alignas(4) int hasNormalMap;
     alignas(4) int hasMetallicRoughnessMap;
     alignas(4) int hasEmissiveMap;
+    alignas(4) int hasOcclusionMap;
+};
+struct SkyboxPushConstant {
+    alignas(16) glm::mat4 model;
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 proj;
 };
 
 
@@ -83,19 +104,61 @@ private:
     VkDescriptorImageInfo getTextureImageInfo(const std::shared_ptr<Texture>& texture, 
                                              std::shared_ptr<Texture> defaultTexture);
     void createPBRTestScene();
+
+//=============camera system================
+private:
+    // Camera system
+    std::unique_ptr<Camera> camera;
+
     
+    // Input state
+    bool keys[1024] = {false};  // Track keyboard state
  
+    float lastX = 0.0f;
+    float lastY = 0.0f;
+    
+    
+    // Timing
+    float deltaTime = 0.0f;
+    float lastFrame = 0.0f;
+
+
+   
+public:
+    // Input callbacks
+    void processKeyboard(int key, int action);
+    void processMouseMovement(double xpos, double ypos);
+    void processMouseButton(int button, int action);
+    void processScroll(double xoffset, double yoffset);
+    void updateCamera(float deltaTime);
+    Camera* getCamera() const { return camera.get(); }
+ 
+    Scene* getScene() const { return scene.get(); }
+  
+    VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
+    float getNearPlane() const { return nearPlane; }
+    float getFarPlane() const { return farPlane; }
+    bool isPBRPipelineReady() const { return pbrPipeline != VK_NULL_HANDLE; }
+   
+    bool isSkyboxReady() const { return skyboxPipeline != VK_NULL_HANDLE; }
+    
+    // Helper methods for single time commands (if not already present)
+    VkCommandBuffer beginSingleTimeCommands();
+    void endSingleTimeCommands(VkCommandBuffer commandBuffer);
+    bool firstMouse = true;
+    bool mouseCaptured = false;
+    // Getters for GLFW callbacks
+    GLFWwindow* getWindow() { return window; }
 
     
-public:
-    enum class RenderMode {
-        Standard,
-        PBR,
-        PBR_IBL
-    };
+//=================================
 
+//=============debug system================
+public:
+    std::unique_ptr<DebugUIManager> debugUI;
+public:
+   
     // IBL setup methods
-    bool setupIBL(const std::string& hdriPath);
     
     // Getter for IBL system
     IBLSystem* getIBLSystem() { return iblSystem.get(); }
@@ -191,7 +254,13 @@ public:
 private:
     std::vector<VkFence> imagesInFlight;
 
- 
+    //skybox related resources
+    VkPipelineLayout skyboxPipelineLayout;
+    VkPipeline skyboxPipeline;
+    VkDescriptorSetLayout skyboxDescriptorSetLayout;
+    std::vector<VkDescriptorSet> skyboxDescriptorSets;
+    std::shared_ptr<Mesh> skyboxMesh;
+    VkDescriptorSet placeholderIBLSet = VK_NULL_HANDLE;//TODO: implement 2 pipeline pbr_ibl and prb_noIbl later
     // IBL-related resources
     std::unique_ptr<IBLSystem> iblSystem;
     VkDescriptorSetLayout iblDescriptorSetLayout;
@@ -222,6 +291,7 @@ private:
     std::shared_ptr<Texture> defaultTexture;
     // Create a default white texture
     void createDefaultTexture();
+    void createSkyboxPipeline();
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
@@ -237,6 +307,7 @@ private:
                     VkMemoryPropertyFlags properties, VkImage& image,
                     VkDeviceMemory& imageMemory);
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
+    void initializeDebugUI();
     void createDepthResources();
 public:
     VkDevice getDevice() const { return device; }
@@ -314,7 +385,10 @@ private:
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
         
         void initVulkan();
-        void createInstance();
+    bool setupIBL(const std::string& hdriPath);
+    bool isIBLReady() const { return iblSystem && iblSystem->isReady(); }
+    void setRenderMode(RenderMode mode) { renderMode = mode; }
+    void createInstance();
         void createSurface();
         void pickPhysicalDevice();
 
@@ -335,7 +409,8 @@ private:
         void run();
         void initWindow();
         void mainLoop();
-        void drawFrame();
+    void createPBRIBLTestScene();
+    void drawFrame();
     void createDescriptorSetLayouts();
    
        

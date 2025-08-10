@@ -3,11 +3,35 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <unordered_map>
 #include <glm/vec4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec2.hpp>
 #include <vulkan/vulkan.h>
 #include "../include/texture/Texture.h"
+
+
+// Structure to hold cached cubemap data
+struct CubemapData {
+    std::vector<float> data;  // RGBA float data for all 6 faces
+    uint32_t faceSize;        // Width/height of each face
+    uint32_t mipLevels;       // Number of mip levels
+    
+    // Sample cubemap at given direction with bilinear filtering
+    glm::vec3 sample(const glm::vec3& direction, uint32_t mipLevel = 0) const;
+    
+    // Get pointer to specific face data
+    const float* getFaceData(uint32_t face, uint32_t mipLevel = 0) const;
+    
+    // Calculate offset for a specific mip level and face
+    size_t getOffset(uint32_t face, uint32_t mipLevel = 0) const;
+};
+
+// Cache for environment maps (add as static member or in anonymous namespace)
+static std::unordered_map<VkImage, std::shared_ptr<CubemapData>> cubemapCache;
+
+void cacheEnvironmentMap(std::shared_ptr<Texture> environmentMap, std::shared_ptr<CubemapData> data);
+std::shared_ptr<CubemapData> getCachedEnvironmentData(std::shared_ptr<Texture> environmentMap);
 
 /**
  * Texture utilities specifically for PBR workflow
@@ -15,20 +39,140 @@
 class TextureUtils {
 public:
     /**
+     * IBL Quality Presets
+     */
+    enum class IBLQuality {
+        LOW,      // Fast generation, lower quality
+        MEDIUM,   // Balanced quality/performance
+        HIGH,     // High quality, slower generation
+        ULTRA     // Maximum quality, slowest generation
+    };
+
+    /**
+     * IBL Configuration Structure
+     * Centralizes all resolution and sample count settings for IBL textures
+     */
+    struct IBLConfig {
+        // Resolution settings
+        uint32_t environmentMapSize;     // Base environment cubemap resolution
+        uint32_t irradianceMapSize;      // Irradiance map resolution (diffuse IBL)
+        uint32_t prefilterMapSize;       // Prefiltered map resolution (specular IBL)
+        uint32_t brdfLutResolution;      // BRDF LUT resolution
+        
+        // Mip levels
+        uint32_t prefilterMipLevels;     // Number of mip levels for prefiltered map
+        
+        // Sample counts for convolution
+        uint32_t irradianceSampleCount;  // Samples for irradiance convolution
+        uint32_t prefilterBaseSamples;   // Base samples for prefilter (increases with roughness)
+        uint32_t brdfLutSamples;         // Samples for BRDF LUT generation
+        
+        // Default constructor with medium quality
+        IBLConfig() : IBLConfig(IBLQuality::MEDIUM) {}
+        
+        // Constructor with quality preset
+        explicit IBLConfig(IBLQuality quality) {
+            switch (quality) {
+                case IBLQuality::LOW:
+                    environmentMapSize = 512;
+                    irradianceMapSize = 32;
+                    prefilterMapSize = 64;
+                    brdfLutResolution = 128;
+                    prefilterMipLevels = 4;
+                    irradianceSampleCount = 32;
+                    prefilterBaseSamples = 16;
+                    brdfLutSamples = 128;
+                    break;
+                    
+                case IBLQuality::MEDIUM:
+                    environmentMapSize = 1024;
+                    irradianceMapSize = 64;
+                    prefilterMapSize = 128;
+                    brdfLutResolution = 256;
+                    prefilterMipLevels = 5;
+                    irradianceSampleCount = 64;
+                    prefilterBaseSamples = 32;
+                    brdfLutSamples = 256;
+                    break;
+                    
+                case IBLQuality::HIGH:
+                    environmentMapSize = 2048;
+                    irradianceMapSize = 128;
+                    prefilterMapSize = 256;
+                    brdfLutResolution = 512;
+                    prefilterMipLevels = 6;
+                    irradianceSampleCount = 128;
+                    prefilterBaseSamples = 64;
+                    brdfLutSamples = 512;
+                    break;
+                    
+                case IBLQuality::ULTRA:
+                    environmentMapSize = 4096;
+                    irradianceMapSize = 256;
+                    prefilterMapSize = 512;
+                    brdfLutResolution = 1024;
+                    prefilterMipLevels = 7;
+                    irradianceSampleCount = 256;
+                    prefilterBaseSamples = 128;
+                    brdfLutSamples = 1024;
+                    break;
+            }
+        }
+        
+        // Custom constructor for fine-tuning
+        IBLConfig(uint32_t envSize, uint32_t irrSize, uint32_t prefSize, uint32_t brdfSize)
+            : environmentMapSize(envSize)
+            , irradianceMapSize(irrSize)
+            , prefilterMapSize(prefSize)
+            , brdfLutResolution(brdfSize)
+            , prefilterMipLevels(static_cast<uint32_t>(std::floor(std::log2(prefSize))) + 1)
+            , irradianceSampleCount(64)
+            , prefilterBaseSamples(32)
+            , brdfLutSamples(256) {}
+    };
+
+    // Static configuration instance (can be modified at runtime)
+    static IBLConfig iblConfig;
+    
+    // Set global IBL quality
+    static void setIBLQuality(IBLQuality quality) {
+        iblConfig = IBLConfig(quality);
+    }
+    
+    // Set custom IBL configuration
+    static void setIBLConfig(const IBLConfig& config) {
+        iblConfig = config;
+    }
+    
+    // Get current IBL configuration
+    static const IBLConfig& getIBLConfig() {
+        return iblConfig;
+    }
+
+    /**
      * Create a default normal map (pointing up in tangent space)
      */
     static glm::vec2 integrateBRDF(float NoV, float roughness);
 
+    // Function declarations
+    static std::shared_ptr<CubemapData> readCubemapFromGPU(
+        VkDevice device,
+        VkPhysicalDevice physicalDevice,
+        VkCommandPool commandPool,
+        VkQueue graphicsQueue,
+        std::shared_ptr<Texture> cubemapTexture
+    );
+    
     bool initWithExistingImage(
-    VkImage image, 
-    VkDeviceMemory memory,
-    VkFormat format,
-    uint32_t width,
-    uint32_t height,
-    uint32_t mipLevels,
-    uint32_t layerCount,
-    VkImageViewType viewType,
-    VkImageLayout initialLayout);
+        VkImage image, 
+        VkDeviceMemory memory,
+        VkFormat format,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevels,
+        uint32_t layerCount,
+        VkImageViewType viewType,
+        VkImageLayout initialLayout);
     
     static std::shared_ptr<Texture> createDefaultNormalMap(
         VkDevice device, 
@@ -96,23 +240,26 @@ public:
     
     /**
      * Create a BRDF look-up texture for PBR lighting
+     * @param resolution Optional resolution override (0 = use config)
      */
     static std::shared_ptr<Texture> createBRDFLookUpTexture(
         VkDevice device, 
         VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool,
         VkQueue graphicsQueue,
-        uint32_t resolution = 512);
+        uint32_t resolution = 0);  // 0 means use config
 
     /**
      * Create an environment cubemap from an HDR file
+     * @param customConfig Optional custom configuration for this specific cubemap
      */
     static std::shared_ptr<Texture> createEnvironmentCubemap(
         VkDevice device, 
         VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool, 
         VkQueue graphicsQueue,
-        const std::string& hdrFilePath);
+        const std::string& hdrFilePath,
+        const IBLConfig* customConfig = nullptr);
         
     /**
      * Creates a fallback environment cubemap when no HDR file is available
@@ -125,23 +272,32 @@ public:
 
     /**
      * Create an irradiance map from an environment map for diffuse IBL
+     * @param customConfig Optional custom configuration for this specific map
      */
     static std::shared_ptr<Texture> createIrradianceMap(
         VkDevice device, 
         VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool, 
         VkQueue graphicsQueue,
-        std::shared_ptr<Texture> environmentMap);
+        std::shared_ptr<Texture> environmentMap,
+        const IBLConfig* customConfig = nullptr);
 
+    
+    void static cacheEnvironmentMap(std::shared_ptr<Texture> environmentMap, std::shared_ptr<CubemapData> data);
+    std::shared_ptr<CubemapData> getCachedEnvironmentData(std::shared_ptr<Texture> environmentMap);
+    void static setCurrentEnvironmentData(std::shared_ptr<CubemapData> data);
+    
     /**
      * Create a prefiltered environment map for specular IBL
+     * @param customConfig Optional custom configuration for this specific map
      */
     static std::shared_ptr<Texture> createPrefilterMap(
         VkDevice device, 
         VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool,
         VkQueue graphicsQueue, 
-        std::shared_ptr<Texture> environmentMap);
+        std::shared_ptr<Texture> environmentMap,
+        const IBLConfig* customConfig = nullptr);
 
 private:
     // Helper functions for IBL
@@ -160,8 +316,6 @@ private:
         const glm::vec3& normal, 
         int sampleCount);
         
-    
-    
     static float distributionGGX(float NoH, float alphaSquared);
     
     static std::vector<glm::vec3> generateHemisphereSamples(
