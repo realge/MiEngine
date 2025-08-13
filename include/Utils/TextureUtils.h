@@ -52,7 +52,13 @@ public:
      * IBL Configuration Structure
      * Centralizes all resolution and sample count settings for IBL textures
      */
+    static uint32_t getPrefilterMapSize() {
+        return iblConfig.prefilterMapSize; 
+    }
+    
     struct IBLConfig {
+
+        
         // Resolution settings
         uint32_t environmentMapSize;     // Base environment cubemap resolution
         uint32_t irradianceMapSize;      // Irradiance map resolution (diffuse IBL)
@@ -73,15 +79,14 @@ public:
         // Constructor with quality preset
         explicit IBLConfig(IBLQuality quality) {
             switch (quality) {
-                case IBLQuality::LOW:
-                    environmentMapSize = 512;
+            case IBLQuality::LOW:
+                    environmentMapSize = 256;
                     irradianceMapSize = 32;
                     prefilterMapSize = 64;
-                    brdfLutResolution = 128;
-                    prefilterMipLevels = 4;
-                    irradianceSampleCount = 32;
-                    prefilterBaseSamples = 16;
+                    prefilterMipLevels = 6;  // log2(64) = 6
+                    prefilterBaseSamples = 32;
                     brdfLutSamples = 128;
+                    brdfLutResolution = 256;
                     break;
                     
                 case IBLQuality::MEDIUM:

@@ -8,6 +8,7 @@ public:
     Texture(VkDevice device, VkPhysicalDevice physicalDevice);
     ~Texture();
 
+    // Getters
     VkImage getImage() const { return textureImage; }
     VkFormat getFormat() const { return imageFormat; }
     uint32_t getMipLevels() const { return mipLevels; }
@@ -31,16 +32,21 @@ public:
                                uint32_t mipLevels, uint32_t layerCount, VkImageViewType viewType,
                                VkImageLayout initialLayout);
 
+    uint32_t getWidth() const { return width; }       // ADD THIS
+    uint32_t getHeight() const { return height; } 
+
 private:
     VkDevice device;
     VkPhysicalDevice physicalDevice;
-
+    
     VkImage textureImage = VK_NULL_HANDLE;
     VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
     VkImageView textureImageView = VK_NULL_HANDLE;
     VkSampler textureSampler = VK_NULL_HANDLE;
     VkImageLayout imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    
+
+    uint32_t width = 0;         // ADD THIS
+    uint32_t height = 0;        // ADD THIS
     uint32_t mipLevels = 1;
     VkFormat imageFormat = VK_FORMAT_R8G8B8A8_SRGB;
 

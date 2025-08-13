@@ -19,22 +19,24 @@ namespace {
 }
 
 // Implementation of CubemapData::sample
+
 glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) const {
     // Normalize direction
     glm::vec3 dir = glm::normalize(direction);
     
-    // Determine which face to sample and convert to UV coordinates
+    // Determine which face to sample
     float absX = std::abs(dir.x);
     float absY = std::abs(dir.y);
     float absZ = std::abs(dir.z);
     
     uint32_t faceIndex;
     float u, v;
-    float maxAxis;
     
-    if (absX >= absY && absX >= absZ) {
+    // FIX: More robust face selection to prevent edge cases
+    const float epsilon = 1e-6f;
+    
+    if (absX >= absY - epsilon && absX >= absZ - epsilon) {
         // X face (right or left)
-        maxAxis = absX;
         if (dir.x > 0.0f) {
             // +X face (0)
             faceIndex = 0;
@@ -46,9 +48,8 @@ glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) con
             u = dir.z / absX;
             v = -dir.y / absX;
         }
-    } else if (absY >= absX && absY >= absZ) {
+    } else if (absY >= absX - epsilon && absY >= absZ - epsilon) {
         // Y face (top or bottom)
-        maxAxis = absY;
         if (dir.y > 0.0f) {
             // +Y face (2)
             faceIndex = 2;
@@ -62,7 +63,6 @@ glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) con
         }
     } else {
         // Z face (front or back)
-        maxAxis = absZ;
         if (dir.z > 0.0f) {
             // +Z face (4)
             faceIndex = 4;
@@ -80,11 +80,15 @@ glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) con
     u = u * 0.5f + 0.5f;
     v = v * 0.5f + 0.5f;
     
+    // FIX: Clamp UV coordinates to prevent edge bleeding
+    u = glm::clamp(u, 0.001f, 0.999f);
+    v = glm::clamp(v, 0.001f, 0.999f);
+    
     // Calculate mip level size
     uint32_t mipSize = faceSize >> mipLevel;
     if (mipSize < 1) mipSize = 1;
     
-    // Convert UV to texel coordinates with bilinear filtering
+    // Convert UV to texel coordinates
     float fx = u * (mipSize - 1);
     float fy = v * (mipSize - 1);
     
@@ -101,7 +105,7 @@ glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) con
     
     // Sample 4 texels for bilinear filtering
     auto getPixel = [&](uint32_t x, uint32_t y) -> glm::vec3 {
-        size_t idx = (y * mipSize + x) * 4;  // 4 floats per pixel (RGBA)
+        size_t idx = (y * mipSize + x) * 4;
         return glm::vec3(faceData[idx], faceData[idx + 1], faceData[idx + 2]);
     };
     
@@ -115,8 +119,10 @@ glm::vec3 CubemapData::sample(const glm::vec3& direction, uint32_t mipLevel) con
     glm::vec3 c1 = glm::mix(c01, c11, dx);
     glm::vec3 color = glm::mix(c0, c1, dy);
     
-    return color;
+    // FIX: Clamp output to prevent overflow
+    return glm::clamp(color, glm::vec3(0.0f), glm::vec3(100.0f));
 }
+
 
 // Get pointer to specific face data
 const float* CubemapData::getFaceData(uint32_t face, uint32_t mipLevel) const {
@@ -144,6 +150,8 @@ size_t CubemapData::getOffset(uint32_t face, uint32_t mipLevel) const {
 }
 
 // Read cubemap from GPU to CPU memory
+// In TextureUtils.cpp
+
 std::shared_ptr<CubemapData> TextureUtils::readCubemapFromGPU(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
@@ -161,17 +169,16 @@ std::shared_ptr<CubemapData> TextureUtils::readCubemapFromGPU(
     VkFormat format = cubemapTexture->getFormat();
     uint32_t mipLevels = cubemapTexture->getMipLevels();
     
-    // For now, we'll read only mip level 0 (full resolution)
-    // You can extend this to read all mip levels if needed
-    const uint32_t mipLevel = 0;
-    const uint32_t faceSize = 1024; // Assuming your cubemap is 1024x1024
+    // *** FIX: Get the face size dynamically from the texture object ***
+    const uint32_t faceSize = cubemapTexture->getWidth(); // Assuming Texture class has getWidth()
     const uint32_t numFaces = 6;
+    const uint32_t mipLevel = 0; // Reading only mip level 0
     
     auto cubemapData = std::make_shared<CubemapData>();
     cubemapData->faceSize = faceSize;
     cubemapData->mipLevels = 1; // Only reading mip 0 for now
     
-    // Calculate total data size
+    // Calculate total data size based on the correct faceSize
     VkDeviceSize imageSize = faceSize * faceSize * 4 * sizeof(float) * numFaces;
     cubemapData->data.resize(imageSize / sizeof(float));
     
@@ -342,12 +349,17 @@ std::shared_ptr<CubemapData> TextureUtils::getCachedEnvironmentData(std::shared_
 // Update this function to use cached data
 glm::vec3 sampleCubemapDirection(const glm::vec3& direction) {
     if (g_currentEnvironmentData) {
-        // Use actual HDR data
-        return g_currentEnvironmentData->sample(direction, 0);
+        // FIX: Ensure direction is normalized before sampling
+        glm::vec3 normalizedDir = glm::normalize(direction);
+        
+        // FIX: Sample at mip level 0 for highest quality
+        // The ghosting might be from sampling wrong mip levels
+        return g_currentEnvironmentData->sample(normalizedDir, 0);
     }
     
     // Fallback to procedural sky if no HDR data available
-    float y = direction.y * 0.5f + 0.5f;
+    glm::vec3 normalizedDir = glm::normalize(direction);
+    float y = normalizedDir.y * 0.5f + 0.5f;
     glm::vec3 skyColor = glm::mix(
         glm::vec3(0.8f, 0.85f, 0.9f),  // Horizon
         glm::vec3(0.4f, 0.6f, 0.9f),   // Sky
@@ -356,7 +368,7 @@ glm::vec3 sampleCubemapDirection(const glm::vec3& direction) {
     
     // Add sun
     glm::vec3 sunDir = glm::normalize(glm::vec3(0.5f, 0.7f, 0.3f));
-    float sunDot = glm::max(0.0f, glm::dot(direction, sunDir));
+    float sunDot = glm::max(0.0f, glm::dot(normalizedDir, sunDir));
     skyColor += glm::vec3(1.0f, 0.9f, 0.7f) * pow(sunDot, 32.0f) * 2.0f;
     
     return skyColor;
@@ -441,6 +453,9 @@ glm::vec3 ImportanceSampleGGX(glm::vec2 Xi, glm::vec3 N, float roughness) {
 // Replace the createPrefilterMap function with this complete implementation:
 // In TextureUtils.cpp, replace the face sampling loop in createPrefilterMap:
 
+// In TextureUtils.cpp, replace the face sampling loop in createPrefilterMap with this:
+
+
 std::shared_ptr<Texture> TextureUtils::createPrefilterMap(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
@@ -511,23 +526,14 @@ std::shared_ptr<Texture> TextureUtils::createPrefilterMap(
     
     std::cout << "Generating prefiltered environment map..." << std::endl;
     
-    // Process each mip level
-    for (uint32_t mip = 0; mip < mipLevels; mip++) {
-        uint32_t mipSize = prefilterSize >> mip;
-        if (mipSize < 1) mipSize = 1;
+    // CRITICAL FIX: For roughness = 0 (perfect mirror), we need special handling
+    // Process mip level 0 separately with no filtering
+    {
+        uint32_t mip = 0;
+        uint32_t mipSize = prefilterSize;
         
-        float roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
+        std::cout << "  Mip 0 - Perfect mirror copy (no convolution)" << std::endl;
         
-        // Adaptive sample count based on roughness
-        uint32_t sampleCount = config.prefilterBaseSamples;
-        if (roughness > 0.5f) {
-            sampleCount = config.prefilterBaseSamples * 2;
-        }
-        
-        std::cout << "  Mip " << mip << " (size: " << mipSize << ", roughness: " << roughness 
-                  << ", samples: " << sampleCount << ")" << std::endl;
-        
-        // Create staging buffer
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
         VkDeviceSize bufferSize = mipSize * mipSize * 4 * sizeof(float);
@@ -540,87 +546,138 @@ std::shared_ptr<Texture> TextureUtils::createPrefilterMap(
         void* data;
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
         
-        // Process each face
         for (uint32_t face = 0; face < 6; face++) {
             std::vector<float> faceData(mipSize * mipSize * 4);
             
             #pragma omp parallel for collapse(2)
             for (uint32_t y = 0; y < mipSize; y++) {
                 for (uint32_t x = 0; x < mipSize; x++) {
-                    // CRITICAL FIX: Use proper UV mapping that accounts for texel centers
-                    // This ensures seamless edges between cubemap faces
                     
-                    // Calculate UV coordinates with proper texel center sampling
-                    // Add 0.5 to get texel center, then normalize to [-1, 1] range
-                    float u = ((x + 0.5f) / float(mipSize)) * 2.0f - 1.0f;
-                    float v = ((y + 0.5f) / float(mipSize)) * 2.0f - 1.0f;
+                    float u = (2.0f * (x + 0.5f) / float(mipSize)) - 1.0f;
+                    float v = (2.0f * (y + 0.5f) / float(mipSize)) - 1.0f;
                     
-                    // For edge texels, slightly adjust to prevent sampling artifacts
-                    // This helps maintain seamless connections between faces
-                    const float edgeFix = 1.0f / float(mipSize);
-                    u = u * (1.0f - edgeFix);
-                    v = v * (1.0f - edgeFix);
+                    glm::vec3 direction;
+                    switch (face) {
+                        case 0: direction = glm::normalize(glm::vec3(1.0f, -v, -u)); break;
+                        case 1: direction = glm::normalize(glm::vec3(-1.0f, -v, u)); break;
+                        case 2: direction = glm::normalize(glm::vec3(u, 1.0f, v)); break;
+                        case 3: direction = glm::normalize(glm::vec3(u, -1.0f, -v)); break;
+                        case 4: direction = glm::normalize(glm::vec3(u, -v, 1.0f)); break;
+                        case 5: direction = glm::normalize(glm::vec3(-u, -v, -1.0f)); break;
+                    }
                     
+                    // For mip 0, just directly sample the environment without any convolution
+                    glm::vec3 color = sampleCubemapDirection(direction);
+                    
+                    // Clamp to reasonable range to prevent artifacts
+                    color = glm::clamp(color, glm::vec3(0.0f), glm::vec3(50.0f));
+                    
+                    uint32_t idx = (y * mipSize + x) * 4;
+                    faceData[idx + 0] = color.r;
+                    faceData[idx + 1] = color.g;
+                    faceData[idx + 2] = color.b;
+                    faceData[idx + 3] = 1.0f;
+                }
+            }
+            
+            memcpy(data, faceData.data(), bufferSize);
+            copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, prefilterImage,
+                            mipSize, mipSize, face, mip);
+        }
+        
+        vkUnmapMemory(device, stagingBufferMemory);
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+    
+    // Process remaining mip levels (roughness > 0)
+    for (uint32_t mip = 1; mip < mipLevels; mip++) {
+        uint32_t mipSize = prefilterSize >> mip;
+        if (mipSize < 1) mipSize = 1;
+        
+        // Map roughness so mip 1 starts with some roughness, not 0
+        float roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
+        roughness = std::max(0.1f, roughness); // Never go below 0.1 for filtered mips
+        
+        // Use more samples for lower roughness values to reduce artifacts
+        uint32_t sampleCount = config.prefilterBaseSamples;
+        if (roughness < 0.3f) {
+            sampleCount *= 4; // Much more samples for low roughness
+        } else if (roughness < 0.6f) {
+            sampleCount *= 2;
+        }
+        
+        std::cout << "  Mip " << mip << " (size: " << mipSize << ", roughness: " << roughness 
+                  << ", samples: " << sampleCount << ")" << std::endl;
+        
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        VkDeviceSize bufferSize = mipSize * mipSize * 4 * sizeof(float);
+        
+        createBuffer(device, physicalDevice, bufferSize, 
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    stagingBuffer, stagingBufferMemory);
+        
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+        
+        for (uint32_t face = 0; face < 6; face++) {
+            std::vector<float> faceData(mipSize * mipSize * 4);
+            
+            #pragma omp parallel for collapse(2)
+            for (uint32_t y = 0; y < mipSize; y++) {
+                for (uint32_t x = 0; x < mipSize; x++) {
+                   // Just use the UV coordinates directly:
+                    float u = (2.0f * (x + 0.5f) / float(mipSize)) - 1.0f;
+                    float v = (2.0f * (y + 0.5f) / float(mipSize)) - 1.0f;
+                                        
                     glm::vec3 N;
                     switch (face) {
-                        case 0: // +X
-                            N = glm::normalize(glm::vec3(1.0f, -v, -u));
-                            break;
-                        case 1: // -X
-                            N = glm::normalize(glm::vec3(-1.0f, -v, u));
-                            break;
-                        case 2: // +Y
-                            N = glm::normalize(glm::vec3(u, 1.0f, v));
-                            break;
-                        case 3: // -Y
-                            N = glm::normalize(glm::vec3(u, -1.0f, -v));
-                            break;
-                        case 4: // +Z
-                            N = glm::normalize(glm::vec3(u, -v, 1.0f));
-                            break;
-                        case 5: // -Z
-                            N = glm::normalize(glm::vec3(-u, -v, -1.0f));
-                            break;
+                        case 0: N = glm::normalize(glm::vec3(1.0f, -v, -u)); break;
+                        case 1: N = glm::normalize(glm::vec3(-1.0f, -v, u)); break;
+                        case 2: N = glm::normalize(glm::vec3(u, 1.0f, v)); break;
+                        case 3: N = glm::normalize(glm::vec3(u, -1.0f, -v)); break;
+                        case 4: N = glm::normalize(glm::vec3(u, -v, 1.0f)); break;
+                        case 5: N = glm::normalize(glm::vec3(-u, -v, -1.0f)); break;
                     }
                     
                     glm::vec3 prefilteredColor(0.0f);
                     float totalWeight = 0.0f;
+                    glm::vec3 V = N;
                     
-                    // For roughness = 0, just sample the reflection direction
-                    if (roughness < 0.01f) {
-                        prefilteredColor = sampleCubemapDirection(N);
-                    } else {
-                        // Importance sampling for rough surfaces
-                        glm::vec3 V = N;  // Assume view direction equals normal
+                    for (uint32_t i = 0; i < sampleCount; ++i) {
+                        glm::vec2 Xi = Hammersley(i, sampleCount);
+                        glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
+                        glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
                         
-                        for (uint32_t i = 0; i < sampleCount; ++i) {
-                            glm::vec2 Xi = Hammersley(i, sampleCount);
-                            glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
-                            glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+                        float NdotL = glm::dot(N, L);
+                        
+                        // More aggressive clamping for low roughness
+                        float threshold = roughness < 0.2f ? 0.1f : (roughness < 0.3f ? 0.05f : 0.01f);
+                        
+                        if (NdotL > threshold) {
+                            glm::vec3 sampleColor = sampleCubemapDirection(L);
                             
-                            float NdotL = glm::max(glm::dot(N, L), 0.0f);
-                            if (NdotL > 0.0f) {
-                                // Sample with mip level based on PDF and solid angle
-                                float D = DistributionGGX(N, H, roughness);
-                                float NdotH = glm::max(glm::dot(N, H), 0.0f);
-                                float HdotV = glm::max(glm::dot(H, V), 0.0f);
-                                float pdf = D * NdotH / (4.0f * HdotV) + 0.0001f;
-                                
-                                // Calculate sample solid angle and mip level
-                                float saTexel = 4.0f * glm::pi<float>() / (6.0f * prefilterSize * prefilterSize);
-                                float saSample = 1.0f / (float(sampleCount) * pdf + 0.0001f);
-                                float mipLevel = roughness == 0.0f ? 0.0f : 0.5f * log2(saSample / saTexel);
-                                
-                                glm::vec3 sampleColor = sampleCubemapDirection(L);
-                                prefilteredColor += sampleColor * NdotL;
-                                totalWeight += NdotL;
+                            // Aggressive clamping of sample colors to prevent bright spots
+                            float maxComponent = std::max(sampleColor.r, std::max(sampleColor.g, sampleColor.b));
+                            if (maxComponent > 10.0f) {
+                                sampleColor *= (10.0f / maxComponent); // Normalize very bright samples
                             }
-                        }
-                        
-                        if (totalWeight > 0.0f) {
-                            prefilteredColor /= totalWeight;
+                            
+                            prefilteredColor += sampleColor * NdotL;
+                            totalWeight += NdotL;
                         }
                     }
+                    
+                    if (totalWeight > 0.0001f) {
+                        prefilteredColor /= totalWeight;
+                    } else {
+                        prefilteredColor = sampleCubemapDirection(N);
+                    }
+                    
+                    // Final aggressive clamping
+                    prefilteredColor = glm::clamp(prefilteredColor, glm::vec3(0.0f), glm::vec3(20.0f));
                     
                     uint32_t idx = (y * mipSize + x) * 4;
                     faceData[idx + 0] = prefilteredColor.r;
@@ -848,6 +905,8 @@ std::shared_ptr<Texture> TextureUtils::combineMetallicRoughness(
     
     return texture;
 }
+
+
 
 std::shared_ptr<Texture> TextureUtils::generateNormalFromHeight(
     VkDevice device, 
@@ -1181,33 +1240,30 @@ std::shared_ptr<Texture> TextureUtils::createEnvironmentCubemap(
 // Generate irradiance cubemap from environment map for diffuse IBL
 
 
+// In TextureUtils.cpp
+
 std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
     VkDevice device,
     VkPhysicalDevice physicalDevice,
     VkCommandPool commandPool,
     VkQueue graphicsQueue,
     std::shared_ptr<Texture> environmentMap,
-    const IBLConfig* customConfig)  // Added parameter
+    const IBLConfig* customConfig)
 {
     if (!environmentMap) {
         std::cerr << "No environment map provided for irradiance generation" << std::endl;
         return nullptr;
     }
     
-    // Use custom config if provided, otherwise use global config
     const IBLConfig& config = customConfig ? *customConfig : iblConfig;
-    
-    // Use configuration value instead of hardcoded
-    const uint32_t irradianceSize = config.irradianceMapSize;  // Changed from hardcoded 64
+    const uint32_t irradianceSize = config.irradianceMapSize;
     
     std::cout << "Creating irradiance map with size: " << irradianceSize << "x" << irradianceSize << std::endl;
     
-    // Create a new cubemap texture for the irradiance map
     VkImage irradianceImage;
     VkDeviceMemory irradianceMemory;
-    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; 
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
     
-    // Create image
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -1215,7 +1271,7 @@ std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
     imageInfo.extent.height = irradianceSize;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 6; // Cubemap has 6 faces
+    imageInfo.arrayLayers = 6;
     imageInfo.format = format;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1229,7 +1285,6 @@ std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
         return nullptr;
     }
     
-    // Allocate memory for the irradiance map
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(device, irradianceImage, &memRequirements);
     
@@ -1247,53 +1302,44 @@ std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
     
     vkBindImageMemory(device, irradianceImage, irradianceMemory, 0);
     
-    // TODO: Use a compute shader to perform irradiance convolution
-    // For now, we'll perform a simplified diffuse convolution on the CPU
-    
-    // Create staging buffer for the irradiance data
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
-    VkDeviceSize bufferSize = irradianceSize * irradianceSize * 4 * sizeof(float); // RGBA32F
+    VkDeviceSize bufferSize = irradianceSize * irradianceSize * 4 * sizeof(float);
     
     createBuffer(device, physicalDevice, bufferSize, 
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 stagingBuffer, stagingBufferMemory);
     
-    // Map memory for staging buffer
     void* data;
     vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
     
-    // For a real implementation, we would:
-    // 1. Sample the environment map many times in a hemisphere oriented along the surface normal
-    // 2. Average the results to get the irradiance contribution
+    // *** FIX: Transition layout for ALL faces before the loop ***
+    transitionImageLayout(device, commandPool, graphicsQueue, irradianceImage, format,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        0, 6, 0, 1); // baseLayer=0, layerCount=6
     
-    // This is a simplified diffuse convolution - in a real implementation, use a compute shader
     for (uint32_t face = 0; face < 6; face++) {
-        // Create a more realistic ambient lighting for the irradiance map
         std::vector<float> faceData(irradianceSize * irradianceSize * 4);
         
-        // Perform a simple diffuse convolution for each pixel
+        #pragma omp parallel for
         for (uint32_t y = 0; y < irradianceSize; y++) {
             for (uint32_t x = 0; x < irradianceSize; x++) {
-                // Get direction vector for this pixel
-                float u = (2.0f * x / (irradianceSize - 1.0f)) - 1.0f;
-                float v = (2.0f * y / (irradianceSize - 1.0f)) - 1.0f;
+                float u = (2.0f * (x + 0.5f) / irradianceSize) - 1.0f;
+                float v = (2.0f * (y + 0.5f) / irradianceSize) - 1.0f;
                 
                 glm::vec3 direction;
                 switch (face) {
-                    case 0: direction = glm::normalize(glm::vec3(1.0f, -v, -u)); break;  // +X
-                    case 1: direction = glm::normalize(glm::vec3(-1.0f, -v, u)); break;  // -X
-                    case 2: direction = glm::normalize(glm::vec3(u, 1.0f, v)); break;    // +Y
-                    case 3: direction = glm::normalize(glm::vec3(u, -1.0f, -v)); break;  // -Y
-                    case 4: direction = glm::normalize(glm::vec3(u, -v, 1.0f)); break;   // +Z
-                    case 5: direction = glm::normalize(glm::vec3(-u, -v, -1.0f)); break; // -Z
+                    case 0: direction = glm::normalize(glm::vec3(1.0f, -v, -u)); break;
+                    case 1: direction = glm::normalize(glm::vec3(-1.0f, -v, u)); break;
+                    case 2: direction = glm::normalize(glm::vec3(u, 1.0f, v)); break;
+                    case 3: direction = glm::normalize(glm::vec3(u, -1.0f, -v)); break;
+                    case 4: direction = glm::normalize(glm::vec3(u, -v, 1.0f)); break;
+                    case 5: direction = glm::normalize(glm::vec3(-u, -v, -1.0f)); break;
                 }
                 
-                // Perform a simplified diffuse convolution
-                glm::vec3 irradiance = diffuseConvolution(environmentMap, direction, 64);
+                glm::vec3 irradiance = diffuseConvolution(environmentMap, direction, 128);
                 
-                // Set pixel data
                 uint32_t idx = (y * irradianceSize + x) * 4;
                 faceData[idx + 0] = irradiance.r;
                 faceData[idx + 1] = irradiance.g;
@@ -1302,30 +1348,24 @@ std::shared_ptr<Texture> TextureUtils::createIrradianceMap(
             }
         }
         
-        // Copy face data to staging buffer
         memcpy(data, faceData.data(), bufferSize);
         
-        // Transition layout for copy
-        transitionImageLayout(device, commandPool, graphicsQueue, irradianceImage, format,
-                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            face, 1, 0, 1);
+        // *** FIX: Removed transition from inside the loop ***
         
-        // Copy buffer to image
+        // Copy buffer to the specific face (already in TRANSFER_DST layout)
         copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, irradianceImage,
-                        irradianceSize, irradianceSize, face);
+                        irradianceSize, irradianceSize, face, 0);
     }
     
-    // Transition to shader read optimal
+    // Transition all faces to shader read optimal after all copies are done
     transitionImageLayout(device, commandPool, graphicsQueue, irradianceImage, format,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         0, 6, 0, 1);
     
-    // Clean up staging resources
     vkUnmapMemory(device, stagingBufferMemory);
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
     
-    // Create texture object to wrap the irradiance map
     auto texture = std::make_shared<Texture>(device, physicalDevice);
     texture->initWithExistingImage(irradianceImage, irradianceMemory, format, irradianceSize, irradianceSize, 
                                  1, 6, VK_IMAGE_VIEW_TYPE_CUBE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1524,6 +1564,8 @@ bool Texture::initWithExistingImage(
     VkImageViewType viewType,
     VkImageLayout initialLayout)
 {
+    this->width=width;
+    this->height=height;
     // Clean up existing resources
     if (textureSampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, textureSampler, nullptr);

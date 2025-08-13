@@ -1,43 +1,87 @@
 #include "VulkanRenderer.h"
 
+#include <algorithm>
+
 #include "include/debug/CameraDebugPanel.h"
 #include "include/debug/PerformancePanel.h"
 #include "include/debug/RenderDebugPanel.h"
 #include "include/debug/SceneHierarchyPanel.h"
 #include "include/debug/SettingsPanel.h"
+#include "include/debug/MaterialDebugPanel.h"
 
 
 //===================camera==================
 static VulkanRenderer* rendererInstance = nullptr;
 
 static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    if (rendererInstance) {
-        rendererInstance->processKeyboard(key, action);
-    }
-    
-    // Handle escape key to toggle mouse capture
+    // Always handle escape key to toggle mouse capture, even if ImGui wants keyboard
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         if (rendererInstance->mouseCaptured) {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             rendererInstance->mouseCaptured = false;
             rendererInstance->firstMouse = true;
         }
+        return;
+    }
+    
+    // Always handle function keys (F1-F7) for debug panel toggling, even if ImGui wants keyboard
+    if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F7) {
+        if (rendererInstance) {
+            rendererInstance->processKeyboard(key, action);
+        }
+        return;
+    }
+    
+    // Check if ImGui wants to capture keyboard input
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureKeyboard) {
+            return; // Let ImGui handle the input
+        }
+    }
+    
+    if (rendererInstance) {
+        rendererInstance->processKeyboard(key, action);
     }
 }
 
 static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    // Check if ImGui wants to capture mouse input
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            return; // Let ImGui handle the input
+        }
+    }
+    
     if (rendererInstance) {
         rendererInstance->processMouseMovement(xpos, ypos);
     }
 }
 
 static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    // Check if ImGui wants to capture mouse input
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            return; // Let ImGui handle the input
+        }
+    }
+    
     if (rendererInstance) {
         rendererInstance->processMouseButton(button, action);
     }
 }
 
 static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    // Check if ImGui wants to capture mouse input
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            return; // Let ImGui handle the input
+        }
+    }
+    
     if (rendererInstance) {
         rendererInstance->processScroll(xoffset, yoffset);
     }
@@ -83,6 +127,11 @@ void VulkanRenderer::processKeyboard(int key, int action) {
         if (key == GLFW_KEY_F6) {
             if (debugUI) {
                 debugUI->togglePanel("Settings");
+            }
+        }
+        if (key == GLFW_KEY_F7) {
+            if (debugUI) {
+                debugUI->togglePanel("Material Debug");
             }
         }
     }
@@ -277,7 +326,7 @@ VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>
             return availableFormat;
         }
     }
-    // Fallback to the first format if your preferred one isn’t found
+    // Fallback to the first format if your preferred one isnï¿½t found
     return availableFormats[0];
 }
 VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
@@ -360,7 +409,7 @@ void VulkanRenderer::initVulkan() {
     std::cout << "Descriptor pool created" << std::endl;
 
     // Set IBL Quality
-    TextureUtils::setIBLQuality(TextureUtils::IBLQuality::MEDIUM);
+    TextureUtils::setIBLQuality(TextureUtils::IBLQuality::LOW);
     std::cout << "IBL Quality set to HIGH" << std::endl;
     
     // NOW initialize IBL system (after descriptor pool is created)
@@ -450,7 +499,7 @@ void VulkanRenderer::initVulkan() {
     
     createPBRIBLTestScene();
 
-    scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
+     scene->loadTexturedModel("models/blackrat.fbx", "texture/blackrat_color.png", modelTransform);
 }
 
 // In VulkanRenderer.cpp, replace the setupIBL method with this fixed version:
@@ -836,7 +885,7 @@ void VulkanRenderer::createPBRPipeline() {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;  // Cull back faces
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Standard winding
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;;  // Standard winding
     rasterizer.depthBiasEnable = VK_FALSE;
 
     // Multisampling
@@ -1008,7 +1057,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;  // Cull back faces
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Standard winding
+      rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;  // Standard winding
     // If model appears inside-out, change to:
     // rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
@@ -1293,6 +1342,8 @@ void VulkanRenderer::createPBRIBLTestScene() {
         1.0f,                            // Falloff (unused for directional)
         true                             // isDirectional = true
     );
+
+     scene->clearLights();
     
     // Create sphere mesh data
     MeshData sphereData = modelLoader.CreateSphere(1.0f, 64, 64); // Higher resolution sphere
@@ -1311,7 +1362,7 @@ void VulkanRenderer::createPBRIBLTestScene() {
     // PERFECT REFLECTION SETTINGS
     material->setPBRProperties(
         1.0f,  // metallic = 1.0 (fully metallic)
-        0.0f   // roughness = 0.0 (perfect mirror)
+        0.5f   // roughness = 0.0 (perfect mirror)
     );
     
     material->alpha = 1.0f;
@@ -2037,12 +2088,32 @@ void VulkanRenderer::updateMVPMatrices(const glm::mat4& model, const glm::mat4& 
 // Modify the updateMVPMatrices function to only update view and projection
 void VulkanRenderer::updateViewProjection(const glm::mat4& view, const glm::mat4& proj) {
     UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f); // Identity matrix, not used
+    ubo.model = glm::mat4(1.0f);
     ubo.view = view;
     ubo.proj = proj;
-    
     ubo.cameraPos = cameraPos;
     ubo.time = static_cast<float>(glfwGetTime());
+    
+    // FIX: Better handling of max reflection LOD
+    if (iblSystem && iblSystem->isReady()) {
+        // Get the actual prefilter map size from config
+        uint32_t prefilterSize = TextureUtils::getIBLConfig().prefilterMapSize;
+        
+        // Ensure we have a valid size (minimum 16x16)
+        if (prefilterSize < 16) {
+            prefilterSize = 64; // Default fallback
+            std::cerr << "Warning: Prefilter map size too small, using default 64" << std::endl;
+        }
+        
+        // Calculate mip levels from size: log2(size)
+        float maxLod = std::floor(std::log2(static_cast<float>(prefilterSize)));
+        
+        // Clamp to reasonable range
+        ubo.maxReflectionLod = std::clamp(maxLod, 0.0f, 10.0f);
+    } else {
+        // Default fallback value for LOW quality (64x64 = 6 mip levels)
+        ubo.maxReflectionLod = 6.0f;
+    }
     
     // Update uniform buffer for current frame
     memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
@@ -2222,16 +2293,21 @@ void VulkanRenderer::initializeDebugUI() {
     auto perfPanel = std::make_shared<PerformancePanel>(this);
     auto scenePanel = std::make_shared<SceneHierarchyPanel>(this);
     auto settingsPanel = std::make_shared<SettingsPanel>(this);
+    auto materialPanel = std::make_shared<MaterialDebugPanel>(this);
     
     debugUI->addPanel(cameraPanel);
     debugUI->addPanel(renderPanel);
     debugUI->addPanel(perfPanel);
     debugUI->addPanel(scenePanel);
     debugUI->addPanel(settingsPanel);
+    debugUI->addPanel(materialPanel);
     
-    // Start with only camera and performance panels open
+    // Start with camera, performance, render, and material panels open
+    // Scene hierarchy and settings start closed
     scenePanel->setOpen(false);
     settingsPanel->setOpen(false);
+    renderPanel->setOpen(true);
+    materialPanel->setOpen(true);
     
     std::cout << "Debug UI system initialized with panels" << std::endl;
 }
@@ -2808,6 +2884,7 @@ void VulkanRenderer::cleanup() {
     // Wait for the device to finish operations before cleaning up
     vkDeviceWaitIdle(device);
     
+    // Cleanup validation layers
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
     }
@@ -2815,28 +2892,18 @@ void VulkanRenderer::cleanup() {
     // First cleanup the swap chain (this handles framebuffers, pipelines, etc.)
     cleanupSwapChain();
 
-    // Cleanup uniform buffers
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // Cleanup material uniform buffers
-        vkDestroyBuffer(device, materialUniformBuffers[i], nullptr);
-        vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
-        
-        // Cleanup light uniform buffers
-        vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
-        vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
-        
-        // Cleanup MVP uniform buffers
-        vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-        vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+    // IMPORTANT: Clean up the scene BEFORE IBL system
+    // This ensures all mesh instances are destroyed before their resources
+    if (scene) {
+        scene.reset();
     }
 
-    // IMPORTANT: Cleanup skybox mesh BEFORE destroying the device
-    // This will properly destroy the vertex and index buffers and their memory
+    // Cleanup skybox mesh BEFORE IBL system
     if (skyboxMesh) {
-        skyboxMesh.reset(); // This will call the Mesh destructor which cleans up buffers
+        skyboxMesh.reset();
     }
     
-    // Cleanup skybox pipeline and layout if they exist
+    // Cleanup skybox pipeline resources
     if (skyboxPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, skyboxPipeline, nullptr);
         skyboxPipeline = VK_NULL_HANDLE;
@@ -2852,6 +2919,11 @@ void VulkanRenderer::cleanup() {
         skyboxDescriptorSetLayout = VK_NULL_HANDLE;
     }
 
+    // Cleanup IBL system - this must happen BEFORE destroying descriptor pool
+    if (iblSystem) {
+        iblSystem.reset();
+    }
+
     // Cleanup default textures
     defaultTexture.reset();
     defaultAlbedoTexture.reset();
@@ -2860,46 +2932,90 @@ void VulkanRenderer::cleanup() {
     defaultOcclusionTexture.reset();
     defaultEmissiveTexture.reset();
 
-    // Cleanup scene (this will clean up all meshes and textures)
-    // IMPORTANT: Do this BEFORE destroying the descriptor pool
-    scene.reset();
-    
-    // Cleanup IBL system
-    iblSystem.reset();
+    // Cleanup uniform buffers
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // Cleanup material uniform buffers
+        if (materialUniformBuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, materialUniformBuffers[i], nullptr);
+        }
+        if (materialUniformBuffersMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(device, materialUniformBuffersMemory[i], nullptr);
+        }
+        
+        // Cleanup light uniform buffers
+        if (lightUniformBuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, lightUniformBuffers[i], nullptr);
+        }
+        if (lightUniformBuffersMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(device, lightUniformBuffersMemory[i], nullptr);
+        }
+        
+        // Cleanup MVP uniform buffers
+        if (uniformBuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+        }
+        if (uniformBuffersMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+        }
+    }
 
     // Cleanup descriptor pool and layouts
-    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    vkDestroyDescriptorSetLayout(device, materialDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, mvpDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, lightDescriptorSetLayout, nullptr);
+    if (descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    }
+    if (materialDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, materialDescriptorSetLayout, nullptr);
+    }
+    if (mvpDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, mvpDescriptorSetLayout, nullptr);
+    }
+    if (lightDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, lightDescriptorSetLayout, nullptr);
+    }
 
     // Cleanup synchronization objects
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-        vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-        vkDestroyFence(device, inFlightFences[i], nullptr);
+        if (renderFinishedSemaphores[i] != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        }
+        if (imageAvailableSemaphores[i] != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+        }
+        if (inFlightFences[i] != VK_NULL_HANDLE) {
+            vkDestroyFence(device, inFlightFences[i], nullptr);
+        }
     }
 
-    
-    // Cleanup command pool
-    vkDestroyCommandPool(device, commandPool, nullptr);
-
-    // Cleanup device
-    vkDestroyDevice(device, nullptr);
-
-    // Cleanup surface
-    vkDestroySurfaceKHR(instance, surface, nullptr);
-
-    // Cleanup instance
-    vkDestroyInstance(instance, nullptr);
-
+    // Cleanup debug UI
     if (debugUI) {
         debugUI->cleanup();
         debugUI.reset();
     }
+    
+    // Cleanup command pool - MUST be done before destroying device
+    if (commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(device, commandPool, nullptr);
+    }
+
+    // Cleanup device
+    if (device != VK_NULL_HANDLE) {
+        vkDestroyDevice(device, nullptr);
+    }
+
+    // Cleanup surface
+    if (surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+    }
+
+    // Cleanup instance
+    if (instance != VK_NULL_HANDLE) {
+        vkDestroyInstance(instance, nullptr);
+    }
 
     // Cleanup window
-    glfwDestroyWindow(window);
+    if (window) {
+        glfwDestroyWindow(window);
+    }
     glfwTerminate();
 }
 

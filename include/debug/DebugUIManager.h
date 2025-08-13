@@ -14,6 +14,7 @@ class DebugPanel;
 class CameraDebugPanel;
 class RenderDebugPanel;
 class PerformancePanel;
+class MaterialDebugPanel;
 class Camera;
 class Scene;
 //-----------------------------------------------------------------------------

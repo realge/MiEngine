@@ -20,12 +20,15 @@ layout(location = 7) in vec3 fragViewDir;
 
 layout(location = 0) out vec4 outColor;
 
+
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
     vec3 cameraPos;
     float time;
+	 float maxReflectionLod;
+    vec3 padding;
 } ubo;
 
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
@@ -108,12 +111,12 @@ void main() {
     albedo.rgb *= fragColor;
     
     float metallic = clamp(pushConstants.metallicFactor, 0.0, 1.0);
-    float roughness = clamp(pushConstants.roughnessFactor, 0.04, 1.0);
+    float roughness = clamp(pushConstants.roughnessFactor, 0.0, 1.0);
     float ao = pushConstants.ambientOcclusion;
     
     if (pushConstants.hasMetallicRoughnessMap > 0) {
         vec4 metallicRoughness = texture(metallicRoughnessMap, fragTexCoord);
-        roughness = clamp(metallicRoughness.g * roughness, 0.04, 1.0);
+        roughness = clamp(metallicRoughness.g * roughness, 0.00, 1.0);
         metallic = clamp(metallicRoughness.b * metallic, 0.0, 1.0);
     }
     
@@ -131,8 +134,6 @@ void main() {
     vec3 V = normalize(ubo.cameraPos - fragPosition);
     vec3 R = reflect(-V, N);
     
-	//R.y = -R.y;
-	
     // Calculate F0
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo.rgb, metallic);
@@ -187,11 +188,14 @@ void main() {
     // Diffuse IBL from irradiance map
     vec3 irradiance = texture(irradianceMap, N).rgb;
     vec3 diffuse = irradiance * albedo.rgb;
+	
+		float mipLevel = roughness * ubo.maxReflectionLod;
+
     
-    // Specular IBL using prefiltered environment map and BRDF LUT
-    const float MAX_REFLECTION_LOD = 4.0; // 6 mip levels means max LOD is 5 (0-indexed)
-    vec3 prefilteredColor = textureLod(prefilterMap, R, roughness * MAX_REFLECTION_LOD).rgb;
-    //vec3 prefilteredColor = texture(environmentMap, R).rgb;
+    
+	
+    vec3 prefilteredColor = textureLod(prefilterMap, R, mipLevel).rgb;
+    
     // Sample BRDF LUT with correct coordinates
     float NdotV = max(dot(N, V), 0.0);
     vec2 envBRDF = texture(brdfLUT, vec2(NdotV, roughness)).rg; // R=scale, G=bias
@@ -214,4 +218,6 @@ void main() {
     color = pow(color, vec3(1.0/2.2));
     
     outColor = vec4(color, albedo.a);
+	
+
 }

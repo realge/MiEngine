@@ -205,6 +205,8 @@ public:
         glm::mat4 proj;
         glm::vec3 cameraPos;
         float time;
+        float maxReflectionLod;  // Add this for dynamic mip levels
+        glm::vec3 padding;
     };
     
 public: //light related

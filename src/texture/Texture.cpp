@@ -55,7 +55,8 @@ bool Texture::createFromPixels(const unsigned char* pixels, uint32_t width, uint
                              uint32_t channels, VkCommandPool commandPool, VkQueue graphicsQueue) {
     // Calculate number of mip levels
     mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
-    
+    this->width = width;   // Store the width
+    this->height = height; 
     // Create the texture from the provided pixels
     createTextureImage(pixels, width, height, channels, commandPool, graphicsQueue);
     
@@ -68,6 +69,7 @@ bool Texture::createFromPixels(const unsigned char* pixels, uint32_t width, uint
 
 void Texture::createTextureImage(const unsigned char* pixels, uint32_t width, uint32_t height, uint32_t channels,
                               VkCommandPool commandPool, VkQueue graphicsQueue) {
+    
     VkDeviceSize imageSize = width * height * 4; // Always use 4 channels (RGBA)
     
     // Create a staging buffer to copy pixel data to
@@ -197,6 +199,8 @@ void Texture::createTextureImage(const unsigned char* pixels, uint32_t width, ui
     
     // Update the current image layout
     imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    
+    
 }
 
 void Texture::createTextureImageView() {
